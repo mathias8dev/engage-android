@@ -4,14 +4,24 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import io.engage.sdk.core.application.CoreRuntime
+import io.engage.sdk.spi.EngageModule
 import java.net.URI
 
 /** Entry point shared by every Engage Android module. */
 public object Engage {
     private val lifecycle = MutableStateFlow<EngageLifecycle>(EngageLifecycle.NotStarted)
+    private val modules = linkedMapOf<String, EngageModule>()
+    private var runtime: CoreRuntime? = null
 
     /** Current initialization state, primarily useful to surface integration failures. */
     public val state: StateFlow<EngageLifecycle> = lifecycle.asStateFlow()
+
+    public val installation: Installation get() = requireRuntime().installation
+    public val profile: Profile get() = requireRuntime().profile
+    public val events: Events get() = requireRuntime().events
+    public val actions: Actions get() = requireRuntime().actions
+    public val sdkFeatures: SdkFeatures get() = requireRuntime().sdkFeatures
 
     /**
      * Starts Engage once for the application process.
@@ -31,10 +41,25 @@ public object Engage {
             return
         }
 
+        val started = CoreRuntime(context.applicationContext, config)
+        runtime = started
+        modules.values.forEach(started::startModule)
         lifecycle.value = EngageLifecycle.Started(
             applicationContext = context.applicationContext,
             config = config,
         )
+    }
+
+    /** Internal registration hook invoked by optional official module ContentProviders. */
+    @JvmStatic
+    @Synchronized
+    public fun registerModule(module: EngageModule) {
+        modules[module.id] = module
+        runtime?.startModule(module)
+    }
+
+    internal fun requireRuntime(): CoreRuntime = checkNotNull(runtime) {
+        "Engage.start(context, config) must be called before using the SDK"
     }
 }
 
