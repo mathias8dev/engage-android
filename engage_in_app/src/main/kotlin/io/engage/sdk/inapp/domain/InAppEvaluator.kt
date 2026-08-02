@@ -64,6 +64,8 @@ internal class InAppEvaluator(
     private var currentScreen: String? = null
     private var isForeground = false
 
+    val foreground: Boolean get() = isForeground
+
     fun replaceCampaigns(value: List<Campaign>) {
         campaigns = value
         val keys = value.mapTo(mutableSetOf()) { it.key }
@@ -82,6 +84,13 @@ internal class InAppEvaluator(
                 }.forEach { trigger -> markEligibleIfAbsent(campaign, trigger, now) }
             }
         }
+    }
+
+    fun resetContext() {
+        campaigns = emptyList()
+        eligibleAt.clear()
+        currentScreen = null
+        isForeground = false
     }
 
     fun onSignal(signal: EngageSignal) {
@@ -115,6 +124,7 @@ internal class InAppEvaluator(
                     .forEach { markEligible(campaign, it, now) }
             }
             EngageSignal.AppBackgrounded -> isForeground = false
+            EngageSignal.LocalDataWiped -> resetContext()
         }
     }
 
@@ -136,9 +146,23 @@ internal class InAppEvaluator(
 
     fun nextEvaluationDelayMillis(): Long? {
         val now = clock.instant()
-        return eligibleAt.values.asSequence()
+        val boundaries = buildList {
+            addAll(eligibleAt.values)
+            campaigns.forEach { campaign ->
+                campaign.startAt?.let(::add)
+                campaign.endAt?.let(::add)
+                campaign.availableAt?.let(::add)
+                campaign.expiresAt?.let(::add)
+                val cooldown = campaign.displayPolicy.cooldownMinutes
+                val lastImpression = history.history(campaign.key).lastImpressionAt
+                if (cooldown != null && lastImpression != null) {
+                    add(lastImpression.plus(Duration.ofMinutes(cooldown.toLong())))
+                }
+            }
+        }
+        return boundaries.asSequence()
             .filter { it.isAfter(now) }
-            .map { Duration.between(now, it).toMillis().coerceAtLeast(1) }
+            .map { Duration.between(now, it).toMillis().coerceAtLeast(1) + 1 }
             .minOrNull()
     }
 

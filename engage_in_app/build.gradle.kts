@@ -41,6 +41,7 @@ dependencies {
     api("io.engage:engage-core:0.1.0-SNAPSHOT")
     api("androidx.compose.ui:ui:1.11.4")
     implementation("androidx.activity:activity:1.13.0")
+    implementation("androidx.compose.foundation:foundation-layout:1.11.4")
     implementation("androidx.compose.runtime:runtime:1.11.4")
     implementation("androidx.compose.ui:ui-viewbinding:1.11.4")
     implementation("com.yandex.div:div:32.60.0")

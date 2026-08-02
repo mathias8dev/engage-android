@@ -65,6 +65,11 @@ internal class SharedPreferencesInAppHistory(
         preferences.edit().putLong("${campaignKey(campaignKey)}.dismissed_at", at.toEpochMilli()).apply()
     }
 
+    @Synchronized
+    fun clearAll() {
+        preferences.edit().clear().apply()
+    }
+
     private fun globalKey(suffix: String): String = "g${generation()}.$suffix"
     private fun campaignKey(value: String): String = "g${generation()}.campaign.${value.sha256()}"
 }
@@ -74,4 +79,3 @@ private fun Long.toInstantOrNull(): Instant? = takeIf { it >= 0 }?.let(Instant::
 private fun String.sha256(): String = MessageDigest.getInstance("SHA-256")
     .digest(toByteArray(StandardCharsets.UTF_8))
     .joinToString("") { "%02x".format(it) }
-

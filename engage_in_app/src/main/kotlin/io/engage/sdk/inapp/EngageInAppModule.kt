@@ -10,6 +10,7 @@ import io.engage.sdk.SdkFeature
 import io.engage.sdk.spi.EngageModule
 import io.engage.sdk.spi.EngageModuleContext
 import io.engage.sdk.spi.EngageSyncModule
+import io.engage.sdk.inapp.render.InAppRenderCallbacks
 
 internal object EngageInAppModule : EngageModule {
     override val id: String = "engage-in-app"
@@ -24,6 +25,8 @@ internal object EngageInAppModule : EngageModule {
     fun requireApi(): InApp = checkNotNull(api) {
         "engage-in-app is installed but Engage.start(context, config) has not completed"
     }
+
+    fun requireRenderCallbacks(): InAppRenderCallbacks = requireApi() as InAppRenderCallbacks
 }
 
 public class EngageInAppInitProvider : ContentProvider() {
@@ -37,4 +40,3 @@ public class EngageInAppInitProvider : ContentProvider() {
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
 }
-
