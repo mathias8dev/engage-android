@@ -8,6 +8,7 @@ import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceError
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -38,7 +39,7 @@ internal class EngageContentView(
     private val content: InAppContent,
     private val callbacks: InAppRenderCallbacks,
 ) : FrameLayout(context) {
-    private var visibleReported = false
+    private val visibilityGate = RenderedVisibilityGate()
     private val preDrawListener = android.view.ViewTreeObserver.OnPreDrawListener {
         reportVisibilityIfNeeded()
         true
@@ -53,6 +54,9 @@ internal class EngageContentView(
                     io.engage.sdk.OverlayFormat.FULLSCREEN
                 ) LayoutParams.MATCH_PARENT else LayoutParams.WRAP_CONTENT
                 addView(it, LayoutParams(LayoutParams.MATCH_PARENT, height))
+                if (content.type == InAppContentType.SCENE || content.type == InAppContentType.SURVEY) {
+                    markContentReady()
+                }
             }
             .onFailure { callbacks.onRenderFailed(content) }
     }
@@ -108,7 +112,12 @@ internal class EngageContentView(
                 else -> ImageView.ScaleType.CENTER_CROP
             }
             setOnClickListener { callbacks.onClicked(content) }
-            load(url)
+            load(url) {
+                listener(
+                    onSuccess = { _, _ -> markContentReady() },
+                    onError = { _, _ -> callbacks.onRenderFailed(content) },
+                )
+            }
         }
     }
 
@@ -122,6 +131,17 @@ internal class EngageContentView(
             settings.allowContentAccess = false
             settings.javaScriptEnabled = content.payload.boolean("javaScriptEnabled") == true
             webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String?) {
+                    markContentReady()
+                }
+
+                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                    if (request.isForMainFrame) {
+                        visibilityGate.markFailed()
+                        callbacks.onRenderFailed(content)
+                    }
+                }
+
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
                     handleWebUri(request.url)
 
@@ -149,15 +169,41 @@ internal class EngageContentView(
     }
 
     private fun reportVisibilityIfNeeded() {
-        if (visibleReported || !isShown || width <= 0 || height <= 0) return
+        if (!isShown || width <= 0 || height <= 0) return
         val visible = Rect()
         if (!getGlobalVisibleRect(visible)) return
         val visibleArea = visible.width().toLong() * visible.height().toLong()
         val totalArea = width.toLong() * height.toLong()
-        if (totalArea > 0 && visibleArea * 2 >= totalArea) {
-            visibleReported = true
+        if (visibilityGate.shouldReport(totalArea > 0 && visibleArea * 2 >= totalArea)) {
             callbacks.onVisible(content)
         }
+    }
+
+    private fun markContentReady() {
+        visibilityGate.markReady()
+        reportVisibilityIfNeeded()
+    }
+}
+
+internal class RenderedVisibilityGate {
+    private var ready = false
+    private var failed = false
+    private var reported = false
+
+    fun markReady() {
+        if (failed) return
+        ready = true
+    }
+
+    fun markFailed() {
+        failed = true
+        ready = false
+    }
+
+    fun shouldReport(isVisible: Boolean): Boolean {
+        if (!ready || reported || !isVisible) return false
+        reported = true
+        return true
     }
 }
 

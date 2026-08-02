@@ -94,8 +94,9 @@ private class FakeModuleContext(override val scope: CoroutineScope) : EngageModu
     val operations = mutableListOf<EngageModuleOperation>()
 
     override fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>> = documents
-    override suspend fun enqueue(operation: EngageModuleOperation) {
+    override suspend fun enqueue(operation: EngageModuleOperation): Boolean {
         operations += operation
+        return true
     }
     override suspend fun refresh() = Unit
     override suspend fun executeAction(name: String, arguments: JsonObject): Boolean = true

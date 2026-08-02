@@ -60,6 +60,12 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
 
     override val overlays: InAppOverlays = defaultOverlays
 
+    suspend fun wipe() = mutex.withLock {
+        history.clearAll()
+        evaluator.resetContext()
+        clearPresentationsLocked()
+    }
+
     init {
         context.scope.launch {
             combine(

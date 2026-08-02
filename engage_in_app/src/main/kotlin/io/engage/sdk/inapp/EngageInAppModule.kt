@@ -22,6 +22,10 @@ internal object EngageInAppModule : EngageModule {
         if (api == null) api = DefaultInApp(context)
     }
 
+    override suspend fun wipe() {
+        (api as? DefaultInApp)?.wipe()
+    }
+
     fun requireApi(): InApp = checkNotNull(api) {
         "engage-in-app is installed but Engage.start(context, config) has not completed"
     }
