@@ -1,0 +1,10 @@
+package io.engage.sdk.push.fcm
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+
+public class EngagePushDismissReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) = Unit
+}
+
