@@ -1,6 +1,9 @@
 package io.engage.sdk.core.data
 
 import io.engage.sdk.core.domain.BindingCodeResponse
+import io.engage.sdk.core.domain.AuthorizedMethod
+import io.engage.sdk.core.domain.AuthorizedRequest
+import io.engage.sdk.core.domain.AuthorizedResponse
 import io.engage.sdk.core.domain.BootstrapRequest
 import io.engage.sdk.core.domain.InstallationSession
 import io.engage.sdk.core.domain.InstallationStateResponse
@@ -17,6 +20,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -84,6 +88,34 @@ internal class OkHttpMobileEdgeApi(
             .put(EMPTY_BODY)
             .build(),
     )
+
+    override suspend fun authorizedRequest(
+        endpoint: URI,
+        credential: String,
+        request: AuthorizedRequest,
+    ): AuthorizedResponse = withContext(Dispatchers.IO) {
+        require(!request.path.startsWith('/') && !request.path.contains("://") && request.path.startsWith("sdk/"))
+        val baseUrl = endpoint.resolve(request.path).toURL().toString().toHttpUrl()
+        val url = baseUrl.newBuilder().apply {
+            request.query.toSortedMap().forEach { (name, value) -> addQueryParameter(name, value) }
+        }.build()
+        val builder = authorized(url.toUri(), credential)
+        when (request.method) {
+            AuthorizedMethod.GET -> builder.get()
+            AuthorizedMethod.POST -> builder.post(request.body?.toString()?.jsonBody() ?: EMPTY_BODY)
+        }
+        client.newCall(builder.build()).execute().use { response ->
+            val rawBody = response.body?.string().orEmpty()
+            val parsedBody = rawBody.takeIf(String::isNotBlank)?.let { raw ->
+                try {
+                    json.parseToJsonElement(raw).jsonObject
+                } catch (error: Exception) {
+                    throw IOException("Invalid Engage mobile-edge response", error)
+                }
+            }
+            AuthorizedResponse(response.code, parsedBody)
+        }
+    }
 
     private fun authorized(uri: URI, credential: String): Request.Builder = Request.Builder()
         .url(uri.toURL())

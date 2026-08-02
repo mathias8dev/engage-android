@@ -60,7 +60,27 @@ internal interface MobileEdgeApi {
         revocationCredential: String,
         operationId: String,
     )
+
+    suspend fun authorizedRequest(
+        endpoint: URI,
+        credential: String,
+        request: AuthorizedRequest,
+    ): AuthorizedResponse = error("Authorized optional-module transport is not implemented")
 }
+
+internal enum class AuthorizedMethod { GET, POST }
+
+internal data class AuthorizedRequest(
+    val method: AuthorizedMethod,
+    val path: String,
+    val query: Map<String, String>,
+    val body: kotlinx.serialization.json.JsonObject?,
+)
+
+internal data class AuthorizedResponse(
+    val statusCode: Int,
+    val body: kotlinx.serialization.json.JsonObject?,
+)
 
 internal interface SyncStore {
     val snapshot: StateFlow<StoredSyncSnapshot>

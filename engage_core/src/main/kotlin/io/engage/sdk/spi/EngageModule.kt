@@ -65,6 +65,25 @@ public enum class InteractionType { IMPRESSION, CLICK, DISMISS, CONVERSION }
 public enum class PushReceiptType { DELIVERED, OPENED }
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public enum class EngageHttpMethod { GET, POST }
+
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public data class EngageHttpRequest(
+    val method: EngageHttpMethod,
+    val path: String,
+    val query: Map<String, String> = emptyMap(),
+    val body: JsonObject? = null,
+)
+
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public data class EngageHttpResponse(
+    val statusCode: Int,
+    val body: JsonObject?,
+) {
+    public val isSuccessful: Boolean get() = statusCode in 200..299
+}
+
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public interface EngageModuleContext {
     public val applicationContext: Context
     public val config: EngageConfig
@@ -79,4 +98,6 @@ public interface EngageModuleContext {
     public suspend fun enqueue(operation: EngageModuleOperation)
     public suspend fun refresh()
     public suspend fun executeAction(name: String, arguments: JsonObject): Boolean
+    public suspend fun authorizedRequest(request: EngageHttpRequest): EngageHttpResponse =
+        error("This Engage core does not provide optional-module HTTP transport")
 }

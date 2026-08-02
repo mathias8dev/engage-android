@@ -27,6 +27,9 @@ import io.engage.sdk.core.domain.DeviceMetadata
 import io.engage.sdk.core.domain.OperationType
 import io.engage.sdk.core.domain.SdkModule
 import io.engage.sdk.spi.EngageModule
+import io.engage.sdk.spi.EngageHttpMethod
+import io.engage.sdk.spi.EngageHttpRequest
+import io.engage.sdk.spi.EngageHttpResponse
 import io.engage.sdk.spi.EngageModuleContext
 import io.engage.sdk.spi.EngageModuleOperation
 import io.engage.sdk.spi.EngageRemoteDocument
@@ -157,6 +160,28 @@ internal class CoreRuntime(
 
     override suspend fun executeAction(name: String, arguments: kotlinx.serialization.json.JsonObject): Boolean =
         actionsDelegate.execute(name, arguments)
+
+    override suspend fun authorizedRequest(request: EngageHttpRequest): EngageHttpResponse {
+        require(!request.path.startsWith('/') && !request.path.contains("://") && request.path.startsWith("sdk/")) {
+            "Optional Engage modules may only call relative sdk/ paths"
+        }
+        check(privacy.value == PrivacyState.OPTED_IN) { "Engage is opted out" }
+        val session = operationCoordinator.ensureInstallation()
+        val response = api.authorizedRequest(
+            config.endpoint,
+            session.credential,
+            io.engage.sdk.core.domain.AuthorizedRequest(
+                method = when (request.method) {
+                    EngageHttpMethod.GET -> io.engage.sdk.core.domain.AuthorizedMethod.GET
+                    EngageHttpMethod.POST -> io.engage.sdk.core.domain.AuthorizedMethod.POST
+                },
+                path = request.path,
+                query = request.query,
+                body = request.body,
+            ),
+        )
+        return EngageHttpResponse(response.statusCode, response.body)
+    }
 
     override fun onStart(owner: LifecycleOwner) {
         eventsDelegate.onForeground()
