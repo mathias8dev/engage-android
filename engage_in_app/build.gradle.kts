@@ -20,6 +20,7 @@ android {
     buildFeatures { compose = true }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -35,6 +36,8 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
     api("io.engage:engage-core:0.1.0-SNAPSHOT")
     api("androidx.compose.ui:ui:1.11.4")
     implementation("androidx.activity:activity:1.13.0")
