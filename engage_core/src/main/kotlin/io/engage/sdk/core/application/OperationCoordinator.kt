@@ -26,6 +26,7 @@ internal class OperationCoordinator(
     private val api: MobileEdgeApi,
     private val clock: Clock = Clock.systemUTC(),
     private val newId: () -> String = { UUID.randomUUID().toString() },
+    private val onEnqueued: () -> Unit = {},
 ) {
     private val bootstrapMutex = Mutex()
     private val flushMutex = Mutex()
@@ -74,6 +75,7 @@ internal class OperationCoordinator(
                 payload = payload,
             ),
         )
+        onEnqueued()
         return true
     }
 
@@ -93,6 +95,12 @@ internal class OperationCoordinator(
                 batch = OperationBatchRequest(reserved.batchId, reserved.operations),
             )
             check(response.batchId == reserved.batchId) { "Mobile edge returned another batchId" }
+            val expectedOperationIds = reserved.operations.map(SdkOperation::operationId).toSet()
+            val returnedOperationIds = response.results.map { it.operationId }
+            check(
+                returnedOperationIds.size == returnedOperationIds.toSet().size &&
+                    returnedOperationIds.toSet() == expectedOperationIds,
+            ) { "Mobile edge returned incomplete or duplicate operation results" }
             if (!outbox.settle(reserved.batchId, response.results)) break
         }
     }

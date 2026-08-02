@@ -45,6 +45,7 @@ class OperationCoordinatorTest {
     private val sessions = FakeSessionStore(session)
     private val outbox = FakeOutbox()
     private val api = FakeApi(session)
+    private var enqueueNotifications = 0
     private val coordinator = OperationCoordinator(
         endpoint = URI.create("https://edge.test/v1/"),
         appKey = "eng_app_test",
@@ -54,6 +55,7 @@ class OperationCoordinatorTest {
         api = api,
         clock = Clock.fixed(Instant.parse("2026-08-02T10:15:30Z"), ZoneOffset.UTC),
         newId = { "operation-${outbox.operations.size + 1}" },
+        onEnqueued = { enqueueNotifications += 1 },
     )
 
     @Test
@@ -65,6 +67,7 @@ class OperationCoordinatorTest {
 
         assertTrue(accepted)
         assertEquals(3, outbox.operations.single().generation)
+        assertEquals(1, enqueueNotifications)
 
         coordinator.flush()
 
@@ -80,6 +83,19 @@ class OperationCoordinatorTest {
 
         assertFalse(accepted)
         assertTrue(outbox.operations.isEmpty())
+        assertEquals(0, enqueueNotifications)
+    }
+
+    @Test
+    fun `incomplete acknowledgements leave the reserved batch intact`() = runTest {
+        coordinator.enqueue(OperationType.EVENT_TRACKED, buildJsonObject {})
+        coordinator.enqueue(OperationType.EVENT_TRACKED, buildJsonObject {})
+        api.omitLastResult = true
+
+        val failure = runCatching { coordinator.flush() }.exceptionOrNull()
+
+        assertTrue(failure is IllegalStateException)
+        assertEquals(2, outbox.operations.size)
     }
 
     private class FakeSessionStore(initial: InstallationSession?) : SessionStore {
@@ -132,6 +148,7 @@ class OperationCoordinatorTest {
 
     private class FakeApi(private val bootstrapSession: InstallationSession) : MobileEdgeApi {
         val sent = mutableListOf<OperationBatchRequest>()
+        var omitLastResult = false
         override suspend fun bootstrap(endpoint: URI, appKey: String, request: BootstrapRequest) = bootstrapSession
         override suspend fun issueBindingCode(endpoint: URI, credential: String) =
             BindingCodeResponse("binding-code", "2026-08-02T10:20:00Z")
@@ -157,7 +174,7 @@ class OperationCoordinatorTest {
                 batchId = batch.batchId,
                 results = batch.operations.map {
                     OperationResult(it.operationId, OperationStatus.ACCEPTED)
-                },
+                }.let { if (omitLastResult) it.dropLast(1) else it },
                 serverTime = "2026-08-02T10:15:31Z",
             )
         }
