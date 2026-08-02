@@ -100,10 +100,12 @@ class OperationCoordinatorTest {
 
     private class FakeOutbox : OperationOutbox {
         val operations = mutableListOf<SdkOperation>()
+        override val pending = MutableStateFlow<List<SdkOperation>>(emptyList())
         private var reserved: ReservedOperationBatch? = null
 
         override suspend fun enqueue(operation: SdkOperation) {
             operations += operation
+            pending.value = operations.toList()
         }
 
         override suspend fun reserve(limit: Int, allowedTypes: Set<OperationType>?): ReservedOperationBatch? {
@@ -116,12 +118,14 @@ class OperationCoordinatorTest {
         override suspend fun settle(batchId: String, results: List<OperationResult>): Boolean {
             val ids = results.mapTo(mutableSetOf(), OperationResult::operationId)
             val changed = operations.removeAll { it.operationId in ids }
+            pending.value = operations.toList()
             reserved = null
             return changed
         }
 
         override suspend fun clear() {
             operations.clear()
+            pending.value = emptyList()
             reserved = null
         }
     }

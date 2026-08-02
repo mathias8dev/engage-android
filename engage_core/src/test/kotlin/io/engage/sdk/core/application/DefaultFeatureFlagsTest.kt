@@ -131,12 +131,17 @@ class DefaultFeatureFlagsTest {
 
     private class FakeOutbox : OperationOutbox {
         val operations = mutableListOf<SdkOperation>()
+        override val pending = MutableStateFlow<List<SdkOperation>>(emptyList())
         override suspend fun enqueue(operation: SdkOperation) {
             if (operations.none { it.operationId == operation.operationId }) operations += operation
+            pending.value = operations.toList()
         }
         override suspend fun reserve(limit: Int, allowedTypes: Set<OperationType>?): ReservedOperationBatch? = null
         override suspend fun settle(batchId: String, results: List<OperationResult>) = false
-        override suspend fun clear() = operations.clear()
+        override suspend fun clear() {
+            operations.clear()
+            pending.value = emptyList()
+        }
     }
 
     private class FakeSyncStore(initial: StoredSyncSnapshot) : SyncStore {

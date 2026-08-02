@@ -15,6 +15,8 @@ internal interface SessionStore {
 }
 
 internal interface OperationOutbox {
+    val pending: StateFlow<List<SdkOperation>>
+
     suspend fun enqueue(operation: SdkOperation)
     suspend fun reserve(limit: Int, allowedTypes: Set<OperationType>? = null): ReservedOperationBatch?
 

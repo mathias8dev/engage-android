@@ -12,6 +12,7 @@ import io.engage.sdk.Events
 import io.engage.sdk.FeatureFlags
 import io.engage.sdk.Installation
 import io.engage.sdk.PrivacyState
+import io.engage.sdk.PreferenceCenter
 import io.engage.sdk.Profile
 import io.engage.sdk.SdkFeatures
 import io.engage.sdk.core.BuildConfig
@@ -81,6 +82,14 @@ internal class CoreRuntime(
         features.enabled,
         operationCoordinator,
         exposures,
+        scope,
+    )
+    val preferenceCenter: PreferenceCenter = DefaultPreferenceCenter(
+        applicationContext,
+        sessions,
+        syncStore,
+        outbox,
+        features.enabled,
         scope,
     )
 

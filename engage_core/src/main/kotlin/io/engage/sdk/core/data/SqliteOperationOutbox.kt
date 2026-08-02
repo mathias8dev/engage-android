@@ -10,6 +10,8 @@ import io.engage.sdk.core.domain.OperationType
 import io.engage.sdk.core.domain.ReservedOperationBatch
 import io.engage.sdk.core.domain.SdkOperation
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -23,6 +25,9 @@ internal class SqliteOperationOutbox(
 ) : SQLiteOpenHelper(context, DATABASE, null, VERSION), OperationOutbox {
     private val mutex = Mutex()
     private val json = Json
+    private val pendingState = lazy { MutableStateFlow(readAll(readableDatabase)) }
+
+    override val pending: StateFlow<List<SdkOperation>> get() = pendingState.value
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -57,6 +62,7 @@ internal class SqliteOperationOutbox(
             values,
             SQLiteDatabase.CONFLICT_IGNORE,
         )
+        publishPending()
     }
 
     override suspend fun reserve(
@@ -122,6 +128,7 @@ internal class SqliteOperationOutbox(
                 arrayOf(batchId),
             )
             database.setTransactionSuccessful()
+            publishPending(database)
             settled > 0
         } finally {
             database.endTransaction()
@@ -130,6 +137,7 @@ internal class SqliteOperationOutbox(
 
     override suspend fun clear(): Unit = io {
         writableDatabase.delete("operations", null, null)
+        publishPending()
     }
 
     private fun readBatch(
@@ -165,6 +173,32 @@ internal class SqliteOperationOutbox(
                 }
             }
         }
+    }
+
+    private fun readAll(database: SQLiteDatabase): List<SdkOperation> = database.rawQuery(
+        """
+        SELECT operation_id, generation, type, occurred_at, payload
+        FROM operations ORDER BY sequence
+        """.trimIndent(),
+        null,
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(
+                    SdkOperation(
+                        operationId = cursor.getString(0),
+                        generation = cursor.getLong(1),
+                        type = OperationType.valueOf(cursor.getString(2)),
+                        occurredAt = cursor.getString(3),
+                        payload = json.parseToJsonElement(cursor.getString(4)) as JsonObject,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun publishPending(database: SQLiteDatabase = readableDatabase) {
+        if (pendingState.isInitialized()) pendingState.value.value = readAll(database)
     }
 
     private suspend fun <T> io(block: () -> T): T = mutex.withLock {
