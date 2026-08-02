@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -61,8 +62,16 @@ class DefaultInboxTest {
         runCurrent()
         assertEquals(1, moduleContext.pageRequests)
 
+        val duplicateRefreshes = listOf(
+            async { first.refresh() },
+            async { first.refresh() },
+        )
+        runCurrent()
+        assertEquals(1, moduleContext.pageRequests)
+
         gate.complete(Unit)
         runCurrent()
+        duplicateRefreshes.forEach { it.await() }
         assertEquals("entry-1", first.state.value.entries.single().id.value)
         assertEquals(first.state.value.entries, second.state.value.entries)
 

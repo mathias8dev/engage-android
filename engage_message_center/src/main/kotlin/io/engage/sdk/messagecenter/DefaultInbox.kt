@@ -27,6 +27,7 @@ import io.engage.sdk.messagecenter.domain.RemoteInboxPage
 import io.engage.sdk.spi.EngageModuleContext
 import io.engage.sdk.spi.EngageSignal
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -298,6 +299,8 @@ internal class DefaultInboxPager(
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job)
     private val commandMutex = Mutex()
+    private val inFlightCommandMutex = Mutex()
+    private val inFlightCommands = mutableMapOf<PagerCommand, Deferred<Unit>>()
     private val window = MutableStateFlow(PagerWindow(inbox.generation()))
 
     override val state: StateFlow<InboxPagerState> = combine(
@@ -323,9 +326,9 @@ internal class DefaultInboxPager(
         }
     }
 
-    override suspend fun refresh() = commandMutex.withLock {
+    override suspend fun refresh() = runCoalesced(PagerCommand.REFRESH) {
         ensureOpen()
-        if (!inbox.isEnabled()) return
+        if (!inbox.isEnabled()) return@runCoalesced
         val generation = inbox.generation()
         val targetSize = maxOf(pageSize, window.value.entryIds.size)
         window.value = window.value.copy(generation = generation, isRefreshing = true, error = null)
@@ -351,11 +354,11 @@ internal class DefaultInboxPager(
         }
     }
 
-    override suspend fun loadNextPage() = commandMutex.withLock {
+    override suspend fun loadNextPage() = runCoalesced(PagerCommand.LOAD_NEXT_PAGE) {
         ensureOpen()
-        if (!inbox.isEnabled() || !window.value.hasMore) return
+        if (!inbox.isEnabled() || !window.value.hasMore) return@runCoalesced
         val generation = inbox.generation()
-        val cursor = window.value.nextCursor ?: return
+        val cursor = window.value.nextCursor ?: return@runCoalesced
         window.value = window.value.copy(isLoadingMore = true, error = null)
         try {
             val page = inbox.fetchPage(generation, pageSize, cursor)
@@ -389,6 +392,29 @@ internal class DefaultInboxPager(
 
     private fun ensureOpen() {
         check(!closed.get()) { "InboxPager is closed" }
+    }
+
+    private suspend fun runCoalesced(command: PagerCommand, block: suspend () -> Unit) {
+        val request = inFlightCommandMutex.withLock {
+            inFlightCommands[command]?.takeIf { it.isActive } ?: scope.async(start = CoroutineStart.LAZY) {
+                commandMutex.withLock { block() }
+            }.also { inFlightCommands[command] = it }
+        }
+        request.start()
+        try {
+            request.await()
+        } finally {
+            inFlightCommandMutex.withLock {
+                if (request.isCompleted && inFlightCommands[command] === request) {
+                    inFlightCommands.remove(command)
+                }
+            }
+        }
+    }
+
+    private enum class PagerCommand {
+        REFRESH,
+        LOAD_NEXT_PAGE,
     }
 }
 
