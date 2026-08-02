@@ -24,6 +24,7 @@ public object Engage {
     public val sdkFeatures: SdkFeatures get() = requireRuntime().sdkFeatures
     public val flags: FeatureFlags get() = requireRuntime().flags
     public val preferenceCenter: PreferenceCenter get() = requireRuntime().preferenceCenter
+    public val privacy: Privacy get() = requireRuntime().privacyApi
 
     /**
      * Starts Engage once for the application process.

@@ -13,11 +13,13 @@ import io.engage.sdk.FeatureFlags
 import io.engage.sdk.Installation
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.PreferenceCenter
+import io.engage.sdk.Privacy
 import io.engage.sdk.Profile
 import io.engage.sdk.SdkFeatures
 import io.engage.sdk.core.BuildConfig
 import io.engage.sdk.core.data.AndroidSessionStore
 import io.engage.sdk.core.data.AndroidExposureStore
+import io.engage.sdk.core.data.AndroidRevocationStore
 import io.engage.sdk.core.data.OkHttpMobileEdgeApi
 import io.engage.sdk.core.data.SqliteOperationOutbox
 import io.engage.sdk.core.data.SqliteSyncStore
@@ -54,6 +56,7 @@ internal class CoreRuntime(
     private val outbox = SqliteOperationOutbox(applicationContext)
     private val syncStore = SqliteSyncStore(applicationContext)
     private val exposures = AndroidExposureStore(applicationContext)
+    private val revocations = AndroidRevocationStore(applicationContext)
     private val api = OkHttpMobileEdgeApi(OkHttpClient.Builder().build())
     private val features = DefaultSdkFeatures(applicationContext)
     private val actionsDelegate = DefaultActions()
@@ -92,6 +95,18 @@ internal class CoreRuntime(
         features.enabled,
         scope,
     )
+    private val privacyDelegate = DefaultPrivacy(
+        config.endpoint,
+        sessions,
+        outbox,
+        syncStore,
+        exposures,
+        revocations,
+        operationCoordinator,
+        api,
+        scope,
+    )
+    val privacyApi: Privacy = privacyDelegate
 
     override val installationId: StateFlow<String?> = installation.id
     override val generation: StateFlow<Long> = sessions.session
@@ -103,7 +118,12 @@ internal class CoreRuntime(
 
     init {
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
-        if (privacy.value == PrivacyState.OPTED_IN) refreshInBackground()
+        privacyDelegate.replayPendingRevocation()
+        if (privacy.value == PrivacyState.OPTED_IN) {
+            refreshInBackground()
+        } else {
+            scope.launch { runCatching { operationCoordinator.flush() } }
+        }
     }
 
     @Synchronized

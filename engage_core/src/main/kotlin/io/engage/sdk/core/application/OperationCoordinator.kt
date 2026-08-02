@@ -29,8 +29,13 @@ internal class OperationCoordinator(
 ) {
     private val bootstrapMutex = Mutex()
     private val flushMutex = Mutex()
+    private var installationEnabled = sessions.privacy.value == PrivacyState.OPTED_IN
 
-    suspend fun ensureInstallation() = bootstrapMutex.withLock {
+    suspend fun ensureInstallation(allowWhileOptedOut: Boolean = false) = bootstrapMutex.withLock {
+        check(installationEnabled) { "Engage installation was wiped; call privacy.optIn() first" }
+        check(allowWhileOptedOut || sessions.privacy.value == PrivacyState.OPTED_IN) {
+            "Engage is opted out"
+        }
         sessions.session.value ?: api.bootstrap(
             endpoint = endpoint,
             appKey = appKey,
@@ -43,6 +48,15 @@ internal class OperationCoordinator(
         return api.issueBindingCode(endpoint, session.credential).code
     }
 
+    suspend fun prepareWipe() = bootstrapMutex.withLock {
+        installationEnabled = false
+        sessions.session.value
+    }
+
+    suspend fun resumeAfterWipe() = bootstrapMutex.withLock {
+        installationEnabled = true
+    }
+
     suspend fun enqueue(
         type: OperationType,
         payload: JsonObject,
@@ -50,7 +64,7 @@ internal class OperationCoordinator(
         operationId: String = newId(),
     ): Boolean {
         if (!allowWhileOptedOut && sessions.privacy.value == PrivacyState.OPTED_OUT) return false
-        val session = ensureInstallation()
+        val session = ensureInstallation(allowWhileOptedOut)
         outbox.enqueue(
             SdkOperation(
                 operationId = operationId,
@@ -64,7 +78,8 @@ internal class OperationCoordinator(
     }
 
     suspend fun flush() = flushMutex.withLock {
-        val session = ensureInstallation()
+        val session = sessions.session.value
+            ?: ensureInstallation(allowWhileOptedOut = sessions.privacy.value == PrivacyState.OPTED_OUT)
         while (true) {
             val allowedTypes = if (sessions.privacy.value == PrivacyState.OPTED_OUT) {
                 setOf(OperationType.PRIVACY_STATE_SET)
