@@ -35,6 +35,7 @@ internal class DefaultPrivacy(
     private val api: MobileEdgeApi,
     private val scope: CoroutineScope,
     private val newId: () -> String = { UUID.randomUUID().toString() },
+    private val onLocalDataWiped: () -> Unit = {},
 ) : Privacy {
     private val mutex = Mutex()
     private var revocationJob: Job? = null
@@ -78,6 +79,7 @@ internal class DefaultPrivacy(
         syncStore.clear()
         exposures.clear()
         sessions.clearSession()
+        onLocalDataWiped()
         replayPendingRevocation()
     }
 
@@ -105,4 +107,3 @@ internal class DefaultPrivacy(
         const val MAX_BACKOFF_MILLIS = 15 * 60 * 1_000L
     }
 }
-

@@ -40,6 +40,7 @@ public sealed interface EngageSignal {
     public data object ScreenCleared : EngageSignal
     public data object AppOpened : EngageSignal
     public data object AppBackgrounded : EngageSignal
+    public data object LocalDataWiped : EngageSignal
 }
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
@@ -79,4 +80,3 @@ public interface EngageModuleContext {
     public suspend fun refresh()
     public suspend fun executeAction(name: String, arguments: JsonObject): Boolean
 }
-

@@ -105,6 +105,7 @@ internal class CoreRuntime(
         operationCoordinator,
         api,
         scope,
+        onLocalDataWiped = { mutableSignals.tryEmit(EngageSignal.LocalDataWiped) },
     )
     val privacyApi: Privacy = privacyDelegate
 

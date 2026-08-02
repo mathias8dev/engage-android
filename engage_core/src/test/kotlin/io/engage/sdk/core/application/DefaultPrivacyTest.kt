@@ -55,6 +55,7 @@ class DefaultPrivacyTest {
         val revocations = FakeRevocations()
         val api = FailingRevocationApi
         val endpoint = URI.create("https://edge.test/v1/")
+        var moduleWipeNotified = false
         val coordinator = OperationCoordinator(
             endpoint,
             "eng_app_test",
@@ -74,6 +75,7 @@ class DefaultPrivacyTest {
             api,
             backgroundScope,
             newId = { "revocation-operation" },
+            onLocalDataWiped = { moduleWipeNotified = true },
         )
 
         privacy.optOutAndWipe()
@@ -83,6 +85,7 @@ class DefaultPrivacyTest {
         assertTrue(outbox.pending.value.isEmpty())
         assertTrue(sync.cleared)
         assertTrue(exposures.cleared)
+        assertTrue(moduleWipeNotified)
         assertEquals(
             RevocationEnvelope("revocation-operation", "limited-revocation"),
             revocations.envelope,
@@ -151,4 +154,3 @@ class DefaultPrivacyTest {
         }
     }
 }
-
