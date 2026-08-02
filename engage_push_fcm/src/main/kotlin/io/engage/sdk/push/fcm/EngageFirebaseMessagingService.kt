@@ -4,7 +4,13 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
 public class EngageFirebaseMessagingService : FirebaseMessagingService() {
-    override fun onNewToken(token: String) = Unit
     @Suppress("OVERRIDE_DEPRECATION")
-    override fun onMessageReceived(message: RemoteMessage) = Unit
+    override fun onNewToken(token: String) {
+        EngagePushModule.onNewToken(token)
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onMessageReceived(message: RemoteMessage) {
+        EngagePushModule.onMessage(message)
+    }
 }

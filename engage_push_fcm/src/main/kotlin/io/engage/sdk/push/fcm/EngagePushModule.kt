@@ -24,6 +24,10 @@ internal object EngagePushModule : EngageModule {
     fun requireApi(): Push = checkNotNull(api) {
         "engage-push-fcm is installed but Engage.start(context, config) has not completed"
     }
+
+    fun onNewToken(token: String) = (api as? DefaultPush)?.onNewToken(token)
+    fun onMessage(message: com.google.firebase.messaging.RemoteMessage) = (api as? DefaultPush)?.onMessage(message)
+    fun onDismiss(intent: android.content.Intent) = (api as? DefaultPush)?.onDismiss(intent)
 }
 
 public class EngagePushInitProvider : ContentProvider() {
@@ -38,4 +42,3 @@ public class EngagePushInitProvider : ContentProvider() {
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
 }
-

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 
 public class EngagePushDismissReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) = Unit
+    override fun onReceive(context: Context, intent: Intent) {
+        EngagePushModule.onDismiss(intent)
+    }
 }
-
