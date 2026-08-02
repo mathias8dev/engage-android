@@ -12,5 +12,18 @@ renderings immediately, resolves only missing snapshots in batches, paginates ne
 list, supports pull-to-refresh and mark-all-read, and executes custom DivKit actions through
 `Engage.actions`.
 
+An unread entry is marked read after its successfully rendered card is at least 50% visible. The
+rendering plane also reserves these action URLs for published DivKit templates:
+
+```text
+engage://mark-read
+engage://mark-unread
+engage://delete
+engage://action/<registered-action>?arguments=<url-encoded-json-object>
+```
+
+Other URLs retain DivKit's normal handling and mark the entry read when activated. Apps may
+override the `engage_message_center_*` string resources to localize the ready-made chrome.
+
 The headless `InboxEntry.key` and `InboxEntry.payload` remain untouched. Removing this artifact
 removes the UI and rendering transport without changing the data-plane API.
