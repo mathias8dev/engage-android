@@ -17,7 +17,6 @@ import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.edit
 import androidx.core.net.toUri
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.RemoteMessage
@@ -45,6 +44,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.security.MessageDigest
@@ -69,6 +70,7 @@ internal class DefaultPush(
     private var currentToken: String? = null
     private var appInForeground = false
     private var previousPrivacy = moduleContext.privacy.value
+    private val tokenMutex = Mutex()
 
     override val status: StateFlow<PushStatus> = mutableStatus
     override val events: SharedFlow<PushEvent> = mutableEvents
@@ -185,28 +187,31 @@ internal class DefaultPush(
         }
     }
 
-    private suspend fun synchronizeToken() {
+    private suspend fun synchronizeToken() = tokenMutex.withLock {
         if (moduleContext.privacy.value != PrivacyState.OPTED_IN) return
         if (SdkFeature.PUSH !in moduleContext.enabledFeatures.value) {
             if (preferences.getString(REGISTERED_TOKEN_HASH, null) != DISABLED_MARKER) {
                 moduleContext.enqueue(EngageModuleOperation.PushTokenChanged(null))
-                preferences.edit { putString(REGISTERED_TOKEN_HASH, DISABLED_MARKER) }
+                persistRegisteredTokenHash(DISABLED_MARKER)
                 mutableStatus.value = mutableStatus.value.copy(tokenRegistered = false)
             }
             return
         }
         val token = currentToken ?: runCatching { tokenProvider.token() }.getOrNull() ?: return
         currentToken = token
-        submitTokenIfNeeded(token)
+        submitTokenIfNeededLocked(token)
     }
 
-    private suspend fun submitTokenIfNeeded(token: String) {
+    private suspend fun submitTokenIfNeeded(token: String) = tokenMutex.withLock {
+        submitTokenIfNeededLocked(token)
+    }
+
+    private suspend fun submitTokenIfNeededLocked(token: String) {
         if (!canRun()) return
         val hash = token.sha256()
         if (preferences.getString(REGISTERED_TOKEN_HASH, null) == hash) return
         moduleContext.enqueue(EngageModuleOperation.PushTokenChanged(token))
-        preferences.edit { putString(REGISTERED_TOKEN_HASH, hash) }
-        mutableStatus.value = mutableStatus.value.copy(tokenRegistered = true)
+        persistRegisteredTokenHash(hash)
     }
 
     private fun refreshPermission() {
@@ -222,6 +227,12 @@ internal class DefaultPush(
             "Could not persist Engage push subscription"
         }
         mutableStatus.value = mutableStatus.value.copy(subscription = subscription)
+    }
+
+    private fun persistRegisteredTokenHash(hash: String) {
+        check(preferences.edit().putString(REGISTERED_TOKEN_HASH, hash).commit()) {
+            "Could not persist Engage push token state"
+        }
     }
 
     private fun storedSubscription(): PushSubscriptionState = preferences.getString(SUBSCRIPTION, null)
