@@ -36,11 +36,41 @@ internal interface MobileEdgeApi {
         credential: String,
     ): BindingCodeResponse
 
+    suspend fun getInstallation(
+        endpoint: URI,
+        credential: String,
+    ): InstallationStateResponse
+
     suspend fun sendOperations(
         endpoint: URI,
         credential: String,
         batch: OperationBatchRequest,
     ): OperationBatchResponse
+
+    suspend fun synchronize(
+        endpoint: URI,
+        credential: String,
+        request: SyncRequest,
+    ): SyncResponse
+
+    suspend fun revoke(
+        endpoint: URI,
+        revocationCredential: String,
+        operationId: String,
+    )
+}
+
+internal interface SyncStore {
+    val snapshot: StateFlow<StoredSyncSnapshot>
+
+    suspend fun apply(requestedModules: Set<SdkModule>, response: SyncResponse)
+    suspend fun clear()
+}
+
+internal interface RevocationStore {
+    suspend fun get(): RevocationEnvelope?
+    suspend fun save(envelope: RevocationEnvelope)
+    suspend fun clear()
 }
 
 internal fun DeviceMetadata.toBootstrapRequest(recoveryToken: String?): BootstrapRequest =
@@ -54,4 +84,3 @@ internal fun DeviceMetadata.toBootstrapRequest(recoveryToken: String?): Bootstra
         osVersion = osVersion,
         recoveryToken = recoveryToken,
     )
-

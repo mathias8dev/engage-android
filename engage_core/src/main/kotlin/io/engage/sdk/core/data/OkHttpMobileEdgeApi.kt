@@ -3,9 +3,12 @@ package io.engage.sdk.core.data
 import io.engage.sdk.core.domain.BindingCodeResponse
 import io.engage.sdk.core.domain.BootstrapRequest
 import io.engage.sdk.core.domain.InstallationSession
+import io.engage.sdk.core.domain.InstallationStateResponse
 import io.engage.sdk.core.domain.MobileEdgeApi
 import io.engage.sdk.core.domain.OperationBatchRequest
 import io.engage.sdk.core.domain.OperationBatchResponse
+import io.engage.sdk.core.domain.SyncRequest
+import io.engage.sdk.core.domain.SyncResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -42,6 +45,14 @@ internal class OkHttpMobileEdgeApi(
             BindingCodeResponse.serializer(),
         )
 
+    override suspend fun getInstallation(endpoint: URI, credential: String): InstallationStateResponse =
+        execute(
+            authorized(endpoint.resolve("sdk/installation"), credential)
+                .get()
+                .build(),
+            InstallationStateResponse.serializer(),
+        )
+
     override suspend fun sendOperations(
         endpoint: URI,
         credential: String,
@@ -51,6 +62,27 @@ internal class OkHttpMobileEdgeApi(
             .post(json.encodeToString(batch).jsonBody())
             .build(),
         OperationBatchResponse.serializer(),
+    )
+
+    override suspend fun synchronize(
+        endpoint: URI,
+        credential: String,
+        request: SyncRequest,
+    ): SyncResponse = execute(
+        authorized(endpoint.resolve("sdk/sync"), credential)
+            .post(json.encodeToString(request).jsonBody())
+            .build(),
+        SyncResponse.serializer(),
+    )
+
+    override suspend fun revoke(
+        endpoint: URI,
+        revocationCredential: String,
+        operationId: String,
+    ): Unit = executeNoContent(
+        authorized(endpoint.resolve("sdk/privacy/revocations/$operationId"), revocationCredential)
+            .put(EMPTY_BODY)
+            .build(),
     )
 
     private fun authorized(uri: URI, credential: String): Request.Builder = Request.Builder()
@@ -69,6 +101,13 @@ internal class OkHttpMobileEdgeApi(
             } catch (error: SerializationException) {
                 throw IOException("Invalid Engage mobile-edge response", error)
             }
+        }
+    }
+
+    private suspend fun executeNoContent(request: Request): Unit = withContext(Dispatchers.IO) {
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw MobileEdgeException.from(response.code, body, json)
         }
     }
 
@@ -95,4 +134,3 @@ internal class MobileEdgeException(
         }
     }
 }
-

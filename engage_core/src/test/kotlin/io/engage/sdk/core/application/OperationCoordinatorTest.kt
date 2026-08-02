@@ -5,6 +5,7 @@ import io.engage.sdk.core.domain.BindingCodeResponse
 import io.engage.sdk.core.domain.BootstrapRequest
 import io.engage.sdk.core.domain.DeviceMetadata
 import io.engage.sdk.core.domain.InstallationSession
+import io.engage.sdk.core.domain.InstallationStateResponse
 import io.engage.sdk.core.domain.MobileEdgeApi
 import io.engage.sdk.core.domain.OperationBatchRequest
 import io.engage.sdk.core.domain.OperationBatchResponse
@@ -15,6 +16,8 @@ import io.engage.sdk.core.domain.OperationType
 import io.engage.sdk.core.domain.ReservedOperationBatch
 import io.engage.sdk.core.domain.SdkOperation
 import io.engage.sdk.core.domain.SessionStore
+import io.engage.sdk.core.domain.SyncRequest
+import io.engage.sdk.core.domain.SyncResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
@@ -128,6 +131,17 @@ class OperationCoordinatorTest {
         override suspend fun issueBindingCode(endpoint: URI, credential: String) =
             BindingCodeResponse("binding-code", "2026-08-02T10:20:00Z")
 
+        override suspend fun getInstallation(endpoint: URI, credential: String) =
+            InstallationStateResponse(
+                "installation-1",
+                3,
+                "BOUND",
+                PrivacyState.OPTED_IN,
+                "OPTED_IN",
+                true,
+                "2026-08-02T10:00:00Z",
+            )
+
         override suspend fun sendOperations(
             endpoint: URI,
             credential: String,
@@ -142,6 +156,10 @@ class OperationCoordinatorTest {
                 serverTime = "2026-08-02T10:15:31Z",
             )
         }
+
+        override suspend fun synchronize(endpoint: URI, credential: String, request: SyncRequest): SyncResponse =
+            error("Not used")
+
+        override suspend fun revoke(endpoint: URI, revocationCredential: String, operationId: String) = Unit
     }
 }
-
