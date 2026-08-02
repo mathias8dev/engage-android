@@ -86,7 +86,7 @@ class SqliteInboxStoreTest {
 
         assertEquals(setOf("new"), store.snapshot.value.entries.keys)
         assertEquals(listOf("new"), store.cachedWindow(8, 20).entryIds)
-        assertTrue(store.cachedWindow(7, 20).entryIds.contains("old"))
+        assertTrue(store.cachedWindow(7, 20).entryIds.isEmpty())
     }
 
     private fun page(vararg entries: RemoteInboxEntry) = RemoteInboxPage(

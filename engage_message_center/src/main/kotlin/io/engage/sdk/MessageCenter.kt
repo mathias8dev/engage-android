@@ -1,5 +1,6 @@
 package io.engage.sdk
 
+import androidx.annotation.RestrictTo
 import io.engage.sdk.messagecenter.EngageMessageCenterModule
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonObject
@@ -64,5 +65,19 @@ public interface MessageCenter {
     val inbox: Inbox
 }
 
-public val Engage.messageCenter: MessageCenter get() = EngageMessageCenterModule.requireApi()
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public data class InboxRenderingSnapshot(
+    val entryId: InboxEntryId,
+    val renderer: String,
+    val revision: Long,
+    val document: JsonObject,
+)
 
+/** Internal bridge consumed only by official Message Center UI artifacts. */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public interface MessageCenterRenderingSupport {
+    public suspend fun resolveRenderings(entryIds: List<InboxEntryId>): List<InboxRenderingSnapshot>
+    public suspend fun executeAction(name: String, arguments: JsonObject): Boolean
+}
+
+public val Engage.messageCenter: MessageCenter get() = EngageMessageCenterModule.requireApi()

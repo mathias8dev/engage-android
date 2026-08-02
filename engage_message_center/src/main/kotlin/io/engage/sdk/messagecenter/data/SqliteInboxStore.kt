@@ -35,7 +35,7 @@ internal class SqliteInboxStore(
 ) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION), InboxStore {
     private val mutex = Mutex()
     private val mutableSnapshot = MutableStateFlow(InboxStoreSnapshot())
-    private var activeGeneration = 0L
+    private var activeGeneration: Long? = null
     override val snapshot: StateFlow<InboxStoreSnapshot> = mutableSnapshot.asStateFlow()
 
     override fun onCreate(database: SQLiteDatabase) {
@@ -104,6 +104,17 @@ internal class SqliteInboxStore(
     override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
 
     override suspend fun activateGeneration(generation: Long) = mutex.withLock {
+        writableDatabase.transaction {
+            listOf(
+                "inbox_page_entries",
+                "inbox_page_state",
+                "inbox_entries",
+                "inbox_meta",
+                "inbox_mutations",
+            ).forEach { table ->
+                delete(table, "generation != ?", arrayOf(generation.toString()))
+            }
+        }
         activeGeneration = generation
         publishLocked(generation)
     }
@@ -282,7 +293,7 @@ internal class SqliteInboxStore(
             delete("inbox_mutations", null, null)
         }
         mutableSnapshot.value = InboxStoreSnapshot()
-        activeGeneration = 0
+        activeGeneration = null
     }
 
     private fun SQLiteDatabase.upsertEntry(generation: Long, entry: RemoteInboxEntry) {

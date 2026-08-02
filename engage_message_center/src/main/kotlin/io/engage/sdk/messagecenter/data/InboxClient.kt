@@ -4,6 +4,7 @@ import io.engage.sdk.messagecenter.domain.InboxRendering
 import io.engage.sdk.messagecenter.domain.InboxScope
 import io.engage.sdk.messagecenter.domain.MutationResult
 import io.engage.sdk.messagecenter.domain.MutationStatus
+import io.engage.sdk.messagecenter.domain.PendingMutation
 import io.engage.sdk.messagecenter.domain.RemoteInboxEntry
 import io.engage.sdk.messagecenter.domain.RemoteInboxPage
 import io.engage.sdk.messagecenter.domain.ReservedMutationBatch
@@ -37,7 +38,7 @@ internal class InboxClient(private val context: EngageModuleContext) {
             ),
         )
         val body = response.requireSuccess()
-        return RemoteInboxPage(
+        val page = RemoteInboxPage(
             entries = body.requiredArray("entries").map { element ->
                 val entry = element as? JsonObject ?: invalidResponse("Inbox entry must be an object")
                 RemoteInboxEntry(
@@ -55,6 +56,8 @@ internal class InboxClient(private val context: EngageModuleContext) {
             unreadCount = body.int("unreadCount")?.coerceAtLeast(0)
                 ?: invalidResponse("Inbox unreadCount is missing"),
         )
+        if (page.hasMore && page.nextCursor == null) invalidResponse("Inbox nextCursor is missing")
+        return page
     }
 
     suspend fun mutate(batch: ReservedMutationBatch): List<MutationResult> {
@@ -78,8 +81,8 @@ internal class InboxClient(private val context: EngageModuleContext) {
             ),
         )
         val body = response.requireSuccess()
-        require(body.requiredString("batchId") == batch.batchId) { "Inbox returned another batchId" }
-        return body.requiredArray("results").map { element ->
+        if (body.requiredString("batchId") != batch.batchId) invalidResponse("Inbox returned another batchId")
+        val results = body.requiredArray("results").map { element ->
             val result = element as? JsonObject ?: invalidResponse("Inbox mutation result must be an object")
             MutationResult(
                 operationId = result.requiredString("operationId"),
@@ -88,22 +91,27 @@ internal class InboxClient(private val context: EngageModuleContext) {
                 message = result.string("message"),
             )
         }
+        if (results.mapTo(mutableSetOf(), MutationResult::operationId) !=
+            batch.operations.mapTo(mutableSetOf(), PendingMutation::operationId)
+        ) invalidResponse("Inbox returned incomplete mutation results")
+        return results
     }
 
     suspend fun renderings(entryIds: List<String>): List<InboxRendering> {
         if (entryIds.isEmpty()) return emptyList()
+        val requestedIds = entryIds.distinct().take(100).toSet()
         val response = context.authorizedRequest(
             EngageHttpRequest(
                 EngageHttpMethod.POST,
                 "sdk/inbox/renderings:resolve",
                 body = buildJsonObject {
                     put("entryIds", buildJsonArray {
-                        entryIds.distinct().take(100).forEach { add(JsonPrimitive(it)) }
+                        requestedIds.forEach { add(JsonPrimitive(it)) }
                     })
                 },
             ),
         )
-        return response.requireSuccess().requiredArray("renderings").map { element ->
+        val renderings = response.requireSuccess().requiredArray("renderings").map { element ->
             val rendering = element as? JsonObject ?: invalidResponse("Inbox rendering must be an object")
             InboxRendering(
                 entryId = rendering.requiredString("entryId"),
@@ -112,6 +120,14 @@ internal class InboxClient(private val context: EngageModuleContext) {
                 document = rendering["document"] as? JsonObject ?: invalidResponse("Rendering document is missing"),
             )
         }
+        if (renderings.any { it.entryId !in requestedIds }) {
+            invalidResponse("Inbox returned a rendering that was not requested")
+        }
+        if (renderings.map(InboxRendering::entryId).distinct().size != renderings.size) {
+            invalidResponse("Inbox returned duplicate renderings")
+        }
+        if (renderings.any { it.revision < 1 }) invalidResponse("Rendering revision must be positive")
+        return renderings
     }
 }
 

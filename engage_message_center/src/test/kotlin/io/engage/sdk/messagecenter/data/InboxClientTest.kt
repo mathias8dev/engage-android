@@ -22,9 +22,11 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -62,6 +64,28 @@ class InboxClientTest {
         assertEquals("7", context.request?.body?.get("generation").toString())
     }
 
+    @Test
+    fun `rendering resolution accepts only requested entries`() = runTest {
+        val context = ClientContext(this).apply { response = response(RENDERING) }
+
+        val rendering = InboxClient(context).renderings(listOf("entry-1", "entry-1")).single()
+
+        assertEquals("entry-1", rendering.entryId)
+        assertEquals("DIVKIT", rendering.renderer)
+        assertEquals(2, rendering.revision)
+        assertEquals(1, (context.request?.body?.get("entryIds") as JsonArray).size)
+    }
+
+    @Test
+    fun `rendering resolution rejects an entry outside the request`() {
+        assertThrows(InboxInvalidResponseException::class.java) {
+            runTest {
+                val context = ClientContext(this).apply { response = response(RENDERING) }
+                InboxClient(context).renderings(listOf("another-entry"))
+            }
+        }
+    }
+
     private fun response(raw: String) = EngageHttpResponse(200, Json.parseToJsonElement(raw).jsonObject)
 
     private companion object {
@@ -78,6 +102,14 @@ class InboxClientTest {
             {
               "batchId":"batch-1","serverTime":"2026-08-02T10:00:00Z",
               "results":[{"operationId":"operation-1","status":"ACCEPTED"}]
+            }
+        """
+        const val RENDERING = """
+            {
+              "renderings":[{
+                "entryId":"entry-1","renderer":"DIVKIT","revision":2,
+                "document":{"card":{"log_id":"inbox-entry-1","states":[]}}
+              }]
             }
         """
     }
@@ -103,4 +135,3 @@ private class ClientContext(override val scope: CoroutineScope) : EngageModuleCo
         return response
     }
 }
-
