@@ -47,12 +47,13 @@ internal class OperationCoordinator(
         type: OperationType,
         payload: JsonObject,
         allowWhileOptedOut: Boolean = false,
+        operationId: String = newId(),
     ): Boolean {
         if (!allowWhileOptedOut && sessions.privacy.value == PrivacyState.OPTED_OUT) return false
         val session = ensureInstallation()
         outbox.enqueue(
             SdkOperation(
-                operationId = newId(),
+                operationId = operationId,
                 generation = session.generation,
                 type = type,
                 occurredAt = Instant.now(clock).toString(),
@@ -65,7 +66,12 @@ internal class OperationCoordinator(
     suspend fun flush() = flushMutex.withLock {
         val session = ensureInstallation()
         while (true) {
-            val reserved = outbox.reserve(MAX_BATCH_SIZE) ?: break
+            val allowedTypes = if (sessions.privacy.value == PrivacyState.OPTED_OUT) {
+                setOf(OperationType.PRIVACY_STATE_SET)
+            } else {
+                null
+            }
+            val reserved = outbox.reserve(MAX_BATCH_SIZE, allowedTypes) ?: break
             val response = api.sendOperations(
                 endpoint = endpoint,
                 credential = session.credential,
@@ -80,4 +86,3 @@ internal class OperationCoordinator(
         const val MAX_BATCH_SIZE = 100
     }
 }
-

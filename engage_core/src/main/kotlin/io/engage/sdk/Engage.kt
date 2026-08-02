@@ -22,6 +22,7 @@ public object Engage {
     public val events: Events get() = requireRuntime().events
     public val actions: Actions get() = requireRuntime().actions
     public val sdkFeatures: SdkFeatures get() = requireRuntime().sdkFeatures
+    public val flags: FeatureFlags get() = requireRuntime().flags
 
     /**
      * Starts Engage once for the application process.

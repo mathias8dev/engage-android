@@ -106,10 +106,11 @@ class OperationCoordinatorTest {
             operations += operation
         }
 
-        override suspend fun reserve(limit: Int): ReservedOperationBatch? {
+        override suspend fun reserve(limit: Int, allowedTypes: Set<OperationType>?): ReservedOperationBatch? {
             reserved?.let { return it }
-            if (operations.isEmpty()) return null
-            return ReservedOperationBatch("batch-1", operations.take(limit)).also { reserved = it }
+            val eligible = operations.filter { allowedTypes == null || it.type in allowedTypes }
+            if (eligible.isEmpty()) return null
+            return ReservedOperationBatch("batch-1", eligible.take(limit)).also { reserved = it }
         }
 
         override suspend fun settle(batchId: String, results: List<OperationResult>): Boolean {

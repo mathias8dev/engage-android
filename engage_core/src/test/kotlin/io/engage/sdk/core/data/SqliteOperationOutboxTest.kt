@@ -51,4 +51,3 @@ class SqliteOperationOutboxTest {
         payload = buildJsonObject { put("name", "order_completed") },
     )
 }
-

@@ -9,12 +9,14 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import io.engage.sdk.Actions
 import io.engage.sdk.EngageConfig
 import io.engage.sdk.Events
+import io.engage.sdk.FeatureFlags
 import io.engage.sdk.Installation
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.Profile
 import io.engage.sdk.SdkFeatures
 import io.engage.sdk.core.BuildConfig
 import io.engage.sdk.core.data.AndroidSessionStore
+import io.engage.sdk.core.data.AndroidExposureStore
 import io.engage.sdk.core.data.OkHttpMobileEdgeApi
 import io.engage.sdk.core.data.SqliteOperationOutbox
 import io.engage.sdk.core.data.SqliteSyncStore
@@ -50,6 +52,7 @@ internal class CoreRuntime(
     private val sessions = AndroidSessionStore(applicationContext)
     private val outbox = SqliteOperationOutbox(applicationContext)
     private val syncStore = SqliteSyncStore(applicationContext)
+    private val exposures = AndroidExposureStore(applicationContext)
     private val api = OkHttpMobileEdgeApi(OkHttpClient.Builder().build())
     private val features = DefaultSdkFeatures(applicationContext)
     private val actionsDelegate = DefaultActions()
@@ -72,6 +75,14 @@ internal class CoreRuntime(
     val events: Events = eventsDelegate
     val actions: Actions = actionsDelegate
     val sdkFeatures: SdkFeatures = features
+    val flags: FeatureFlags = DefaultFeatureFlags(
+        sessions,
+        syncStore,
+        features.enabled,
+        operationCoordinator,
+        exposures,
+        scope,
+    )
 
     override val installationId: StateFlow<String?> = installation.id
     override val generation: StateFlow<Long> = sessions.session

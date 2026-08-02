@@ -16,7 +16,7 @@ internal interface SessionStore {
 
 internal interface OperationOutbox {
     suspend fun enqueue(operation: SdkOperation)
-    suspend fun reserve(limit: Int): ReservedOperationBatch?
+    suspend fun reserve(limit: Int, allowedTypes: Set<OperationType>? = null): ReservedOperationBatch?
 
     /** Returns true when at least one queued operation was settled. */
     suspend fun settle(batchId: String, results: List<OperationResult>): Boolean
@@ -70,6 +70,12 @@ internal interface SyncStore {
 internal interface RevocationStore {
     suspend fun get(): RevocationEnvelope?
     suspend fun save(envelope: RevocationEnvelope)
+    suspend fun clear()
+}
+
+internal interface ExposureStore {
+    fun contains(exposureId: String): Boolean
+    suspend fun mark(exposureId: String)
     suspend fun clear()
 }
 

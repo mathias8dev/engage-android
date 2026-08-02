@@ -1,0 +1,120 @@
+package io.engage.sdk.core.application
+
+import io.engage.sdk.FeatureFlags
+import io.engage.sdk.PrivacyState
+import io.engage.sdk.SdkFeature
+import io.engage.sdk.core.domain.ExposureStore
+import io.engage.sdk.core.domain.OperationType
+import io.engage.sdk.core.domain.SdkModule
+import io.engage.sdk.core.domain.SessionStore
+import io.engage.sdk.core.domain.SyncStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+
+internal class DefaultFeatureFlags(
+    private val sessions: SessionStore,
+    private val syncStore: SyncStore,
+    private val features: StateFlow<Set<SdkFeature>>,
+    private val coordinator: OperationCoordinator,
+    private val exposures: ExposureStore,
+    private val scope: CoroutineScope,
+    private val json: Json = Json { ignoreUnknownKeys = true },
+) : FeatureFlags {
+    override fun getBoolean(key: String, default: Boolean): Boolean =
+        resolve(key, "BOOLEAN")?.value?.let { (it as? JsonPrimitive)?.content?.toBooleanStrictOrNull() }
+            ?: default
+
+    override fun getString(key: String, default: String): String =
+        resolve(key, "STRING")?.value?.let { (it as? JsonPrimitive)?.contentOrNull }
+            ?: default
+
+    override fun getNumber(key: String, default: Double): Double =
+        resolve(key, "NUMBER")?.value?.let { (it as? JsonPrimitive)?.doubleOrNull }
+            ?: default
+
+    override fun <T> getJson(key: String, serializer: KSerializer<T>, default: T): T {
+        val value = resolve(key, "JSON")?.value ?: return default
+        return runCatching { json.decodeFromJsonElement(serializer, value) }.getOrDefault(default)
+    }
+
+    private fun resolve(key: String, expectedType: String): ResolvedFlag? {
+        require(FLAG_KEY.matches(key)) { "Flag keys must match ${FLAG_KEY.pattern}" }
+        if (sessions.privacy.value != PrivacyState.OPTED_IN || SdkFeature.FEATURE_FLAGS !in features.value) {
+            return null
+        }
+        val snapshot = syncStore.snapshot.value.documents.firstOrNull {
+            it.module == SdkModule.FEATURE_FLAGS && it.key == "snapshot"
+        }?.payload ?: return null
+        val flag = snapshot["flags"]?.jsonObject?.get(key)?.jsonObject ?: return null
+        val type = (flag["type"] as? JsonPrimitive)?.contentOrNull ?: return null
+        if (type != expectedType) return null
+        val value = flag["value"] ?: return null
+        val resolved = ResolvedFlag(
+            value = value,
+            revision = (flag["revision"] as? JsonPrimitive)?.longOrNull ?: return null,
+            variantKey = (flag["variantKey"] as? JsonPrimitive)?.contentOrNull,
+            experimentId = (flag["experimentId"] as? JsonPrimitive)?.contentOrNull,
+        )
+        recordExposure(key, resolved)
+        return resolved
+    }
+
+    private fun recordExposure(key: String, flag: ResolvedFlag) {
+        val experimentId = flag.experimentId ?: return
+        val variantKey = flag.variantKey ?: return
+        val session = sessions.session.value ?: return
+        val exposureId = sha256(
+            listOf(
+                session.installationId,
+                session.generation.toString(),
+                experimentId,
+                flag.revision.toString(),
+                variantKey,
+            ).joinToString("\u0000"),
+        )
+        if (exposures.contains(exposureId)) return
+        scope.launch {
+            val queued = coordinator.enqueue(
+                type = OperationType.FLAG_EXPOSED,
+                operationId = exposureId,
+                payload = buildJsonObject {
+                    put("flagKey", key)
+                    put("experimentId", experimentId)
+                    put("variantKey", variantKey)
+                    put("revision", flag.revision)
+                },
+            )
+            if (queued) exposures.mark(exposureId)
+        }
+    }
+
+    private data class ResolvedFlag(
+        val value: JsonElement,
+        val revision: Long,
+        val variantKey: String?,
+        val experimentId: String?,
+    )
+
+    private companion object {
+        val FLAG_KEY = Regex("^[a-z][a-z0-9_.-]{0,127}$")
+
+        fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
+    }
+}
+

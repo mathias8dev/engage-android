@@ -51,22 +51,39 @@ internal class SqliteOperationOutbox(
             put("occurred_at", operation.occurredAt)
             put("payload", operation.payload.toString())
         }
-        check(writableDatabase.insertOrThrow("operations", null, values) != -1L)
+        writableDatabase.insertWithOnConflict(
+            "operations",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_IGNORE,
+        )
     }
 
-    override suspend fun reserve(limit: Int): ReservedOperationBatch? = io {
+    override suspend fun reserve(
+        limit: Int,
+        allowedTypes: Set<OperationType>?,
+    ): ReservedOperationBatch? = io {
         require(limit in 1..100)
         val database = writableDatabase
         database.beginTransaction()
         try {
+            val selection = allowedTypes?.takeIf(Set<OperationType>::isNotEmpty)?.let { types ->
+                val placeholders = List(types.size) { "?" }.joinToString(",")
+                "type IN ($placeholders)" to types.map(OperationType::name).toTypedArray()
+            }
+            val eligible = selection?.first ?: "1 = 1"
+            val arguments = selection?.second
             val existingBatch = database.rawQuery(
-                "SELECT batch_id FROM operations WHERE batch_id IS NOT NULL ORDER BY sequence LIMIT 1",
-                null,
+                "SELECT batch_id FROM operations WHERE batch_id IS NOT NULL AND $eligible ORDER BY sequence LIMIT 1",
+                arguments,
             ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
             val batchId = existingBatch ?: newBatchId().also { id ->
                 val sequences = database.rawQuery(
-                    "SELECT sequence FROM operations WHERE batch_id IS NULL ORDER BY sequence LIMIT ?",
-                    arrayOf(limit.toString()),
+                    "SELECT sequence FROM operations WHERE batch_id IS NULL AND $eligible ORDER BY sequence LIMIT ?",
+                    buildList {
+                        addAll(arguments.orEmpty())
+                        add(limit.toString())
+                    }.toTypedArray(),
                 ).use { cursor ->
                     buildList {
                         while (cursor.moveToNext()) add(cursor.getLong(0))
@@ -79,7 +96,7 @@ internal class SqliteOperationOutbox(
                     )
                 }
             }
-            val operations = readBatch(database, batchId)
+            val operations = readBatch(database, batchId, allowedTypes)
             database.setTransactionSuccessful()
             operations.takeIf(List<SdkOperation>::isNotEmpty)?.let { ReservedOperationBatch(batchId, it) }
         } finally {
@@ -115,13 +132,24 @@ internal class SqliteOperationOutbox(
         writableDatabase.delete("operations", null, null)
     }
 
-    private fun readBatch(database: SQLiteDatabase, batchId: String): List<SdkOperation> =
-        database.rawQuery(
+    private fun readBatch(
+        database: SQLiteDatabase,
+        batchId: String,
+        allowedTypes: Set<OperationType>?,
+    ): List<SdkOperation> {
+        val selection = allowedTypes?.takeIf(Set<OperationType>::isNotEmpty)?.let { types ->
+            val placeholders = List(types.size) { "?" }.joinToString(",")
+            " AND type IN ($placeholders)" to types.map(OperationType::name).toTypedArray()
+        }
+        return database.rawQuery(
             """
             SELECT operation_id, generation, type, occurred_at, payload
-            FROM operations WHERE batch_id = ? ORDER BY sequence
+            FROM operations WHERE batch_id = ?${selection?.first.orEmpty()} ORDER BY sequence
             """.trimIndent(),
-            arrayOf(batchId),
+            buildList {
+                add(batchId)
+                addAll(selection?.second.orEmpty())
+            }.toTypedArray(),
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
@@ -137,6 +165,7 @@ internal class SqliteOperationOutbox(
                 }
             }
         }
+    }
 
     private suspend fun <T> io(block: () -> T): T = mutex.withLock {
         withContext(Dispatchers.IO) { block() }
@@ -147,4 +176,3 @@ internal class SqliteOperationOutbox(
         const val VERSION = 1
     }
 }
-
