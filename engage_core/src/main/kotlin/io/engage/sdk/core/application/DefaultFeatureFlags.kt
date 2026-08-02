@@ -23,7 +23,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
+import java.util.UUID
 
 internal class DefaultFeatureFlags(
     private val sessions: SessionStore,
@@ -56,7 +56,10 @@ internal class DefaultFeatureFlags(
         if (sessions.privacy.value != PrivacyState.OPTED_IN || SdkFeature.FEATURE_FLAGS !in features.value) {
             return null
         }
-        val snapshot = syncStore.snapshot.value.documents.firstOrNull {
+        val session = sessions.session.value ?: return null
+        val stored = syncStore.snapshot.value
+        if (stored.generation != session.generation) return null
+        val snapshot = stored.documents.firstOrNull {
             it.module == SdkModule.FEATURE_FLAGS && it.key == "snapshot"
         }?.payload ?: return null
         val flag = snapshot["flags"]?.jsonObject?.get(key)?.jsonObject ?: return null
@@ -77,7 +80,7 @@ internal class DefaultFeatureFlags(
         val experimentId = flag.experimentId ?: return
         val variantKey = flag.variantKey ?: return
         val session = sessions.session.value ?: return
-        val exposureId = sha256(
+        val exposureId = deterministicUuid(
             listOf(
                 session.installationId,
                 session.generation.toString(),
@@ -112,9 +115,7 @@ internal class DefaultFeatureFlags(
     private companion object {
         val FLAG_KEY = Regex("^[a-z][a-z0-9_.-]{0,127}$")
 
-        fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
-            .digest(value.toByteArray(StandardCharsets.UTF_8))
-            .joinToString("") { byte -> "%02x".format(byte) }
+        fun deterministicUuid(value: String): String =
+            UUID.nameUUIDFromBytes(value.toByteArray(StandardCharsets.UTF_8)).toString()
     }
 }
-

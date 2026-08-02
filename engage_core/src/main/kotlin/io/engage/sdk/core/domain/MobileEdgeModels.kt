@@ -48,6 +48,7 @@ internal data class SdkOperation(
 internal enum class OperationType {
     EVENT_TRACKED,
     SCREEN_VIEWED,
+    SCREEN_CLEARED,
     INSTALLATION_ATTRIBUTES_EDITED,
     PROFILE_ATTRIBUTES_EDITED,
     PROFILE_TAGS_EDITED,
@@ -55,6 +56,7 @@ internal enum class OperationType {
     PROFILE_SUBSCRIPTIONS_EDITED,
     PUSH_TOKEN_SET,
     PUSH_SUBSCRIPTION_SET,
+    PUSH_PERMISSION_SET,
     PRIVACY_STATE_SET,
     INTERACTION_TRACKED,
     PUSH_RECEIPT_RECORDED,
@@ -103,4 +105,3 @@ internal data class DeviceMetadata(
     val deviceModel: String?,
     val osVersion: String?,
 )
-

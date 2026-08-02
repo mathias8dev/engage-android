@@ -11,6 +11,7 @@ import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -41,6 +42,22 @@ class SqliteOperationOutboxTest {
             listOf(OperationResult("operation-1", OperationStatus.ACCEPTED)),
         )
         assertNull(outbox.reserve(100))
+    }
+
+    @Test
+    fun `an idempotency key cannot silently replace another operation`() = runTest {
+        outbox.enqueue(operation("operation-1"))
+
+        val failure = runCatching {
+            outbox.enqueue(
+                operation("operation-1").copy(
+                    payload = buildJsonObject { put("name", "another_event") },
+                ),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalStateException)
+        assertEquals("order_completed", outbox.pending.value.single().payload["name"].toString().trim('"'))
     }
 
     private fun operation(id: String) = SdkOperation(

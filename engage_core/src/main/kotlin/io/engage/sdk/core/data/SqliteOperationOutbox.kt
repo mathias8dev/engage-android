@@ -56,12 +56,17 @@ internal class SqliteOperationOutbox(
             put("occurred_at", operation.occurredAt)
             put("payload", operation.payload.toString())
         }
-        writableDatabase.insertWithOnConflict(
+        val rowId = writableDatabase.insertWithOnConflict(
             "operations",
             null,
             values,
             SQLiteDatabase.CONFLICT_IGNORE,
         )
+        if (rowId == -1L) {
+            check(readById(writableDatabase, operation.operationId) == operation) {
+                "An Engage operationId is already bound to another operation"
+            }
+        }
         publishPending()
     }
 
@@ -195,6 +200,20 @@ internal class SqliteOperationOutbox(
                 )
             }
         }
+    }
+
+    private fun readById(database: SQLiteDatabase, operationId: String): SdkOperation? = database.rawQuery(
+        "SELECT operation_id, generation, type, occurred_at, payload FROM operations WHERE operation_id = ?",
+        arrayOf(operationId),
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        SdkOperation(
+            operationId = cursor.getString(0),
+            generation = cursor.getLong(1),
+            type = OperationType.valueOf(cursor.getString(2)),
+            occurredAt = cursor.getString(3),
+            payload = json.parseToJsonElement(cursor.getString(4)) as JsonObject,
+        )
     }
 
     private fun publishPending(database: SQLiteDatabase = readableDatabase) {

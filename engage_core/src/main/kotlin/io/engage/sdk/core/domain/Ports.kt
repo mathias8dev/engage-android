@@ -92,7 +92,7 @@ internal interface SyncStore {
 internal interface RevocationStore {
     suspend fun get(): RevocationEnvelope?
     suspend fun save(envelope: RevocationEnvelope)
-    suspend fun clear()
+    suspend fun clear(operationId: String)
 }
 
 internal interface ExposureStore {

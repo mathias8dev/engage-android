@@ -2,6 +2,7 @@ package io.engage.sdk.core.application
 
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.core.domain.MobileEdgeApi
+import io.engage.sdk.core.domain.InstallationStateResponse
 import io.engage.sdk.core.domain.SdkModule
 import io.engage.sdk.core.domain.SessionStore
 import io.engage.sdk.core.domain.SyncRequest
@@ -19,10 +20,30 @@ internal class SyncCoordinator(
     private val mutex = Mutex()
 
     suspend fun refresh(modules: Set<SdkModule>) = mutex.withLock {
-        if (sessions.privacy.value == PrivacyState.OPTED_OUT) return@withLock
-        val session = sessions.session.value ?: return@withLock
+        val remote = reconcileLocked()
+        synchronizeLocked(modules, remote)
+    }
+
+    suspend fun reconcile(): InstallationStateResponse = mutex.withLock {
+        reconcileLocked()
+    }
+
+    suspend fun synchronize(modules: Set<SdkModule>, remote: InstallationStateResponse) = mutex.withLock {
+        synchronizeLocked(modules, remote)
+    }
+
+    private suspend fun reconcileLocked(): InstallationStateResponse {
+        check(sessions.privacy.value == PrivacyState.OPTED_IN) { "Engage is opted out" }
+        val session = checkNotNull(sessions.session.value) { "Engage installation is unavailable" }
         val remote = api.getInstallation(endpoint, session.credential)
-        if (remote.generation != session.generation || remote.privacy != session.privacy) {
+        val identityBoundaryChanged =
+            remote.generation != session.generation || remote.privacy != session.privacy
+        if (identityBoundaryChanged) store.clear()
+        if (
+            identityBoundaryChanged ||
+            remote.pushSubscription != session.pushSubscription ||
+            remote.updatedAt != session.serverTime
+        ) {
             sessions.saveSession(
                 session.copy(
                     generation = remote.generation,
@@ -31,9 +52,13 @@ internal class SyncCoordinator(
                     serverTime = remote.updatedAt,
                 ),
             )
-            store.clear()
         }
-        if (remote.privacy == PrivacyState.OPTED_OUT || modules.isEmpty()) return@withLock
+        return remote
+    }
+
+    private suspend fun synchronizeLocked(modules: Set<SdkModule>, remote: InstallationStateResponse) {
+        if (remote.privacy == PrivacyState.OPTED_OUT || modules.isEmpty()) return
+        val session = sessions.session.value ?: return
         val current = store.snapshot.value
         val response = api.synchronize(
             endpoint,

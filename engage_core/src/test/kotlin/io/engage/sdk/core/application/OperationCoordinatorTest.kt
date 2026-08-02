@@ -19,6 +19,9 @@ import io.engage.sdk.core.domain.SessionStore
 import io.engage.sdk.core.domain.SyncRequest
 import io.engage.sdk.core.domain.SyncResponse
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -31,6 +34,7 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class OperationCoordinatorTest {
     private val session = InstallationSession(
         installationId = "installation-1",
@@ -87,6 +91,67 @@ class OperationCoordinatorTest {
     }
 
     @Test
+    fun `persisted opted out installation can replay its privacy operation after restart`() = runTest {
+        val optedOutSession = session.copy(privacy = PrivacyState.OPTED_OUT)
+        val optedOutSessions = FakeSessionStore(optedOutSession)
+        val optedOutOutbox = FakeOutbox()
+        val optedOutApi = FakeApi(optedOutSession)
+        val optedOutCoordinator = OperationCoordinator(
+            endpoint = URI.create("https://edge.test/v1/"),
+            appKey = "eng_app_test",
+            metadata = DeviceMetadata("fr-FR", "Europe/Paris", "1", "2", "3", "Pixel", "16"),
+            sessions = optedOutSessions,
+            outbox = optedOutOutbox,
+            api = optedOutApi,
+            clock = Clock.fixed(Instant.parse("2026-08-02T10:15:30Z"), ZoneOffset.UTC),
+        )
+
+        assertTrue(
+            optedOutCoordinator.enqueue(
+                type = OperationType.PRIVACY_STATE_SET,
+                payload = buildJsonObject { put("state", "OPTED_OUT") },
+                allowWhileOptedOut = true,
+            ),
+        )
+
+        optedOutCoordinator.flush()
+
+        assertTrue(optedOutOutbox.operations.isEmpty())
+        assertEquals(OperationType.PRIVACY_STATE_SET, optedOutApi.sent.single().operations.single().type)
+    }
+
+    @Test
+    fun `first launch queues durably before network bootstrap`() = runTest {
+        val firstLaunchSessions = FakeSessionStore(null)
+        val firstLaunchOutbox = FakeOutbox()
+        val firstLaunchApi = FakeApi(session)
+        val firstLaunchCoordinator = OperationCoordinator(
+            endpoint = URI.create("https://edge.test/v1/"),
+            appKey = "eng_app_test",
+            metadata = DeviceMetadata("fr-FR", "Europe/Paris", "1", "2", "3", "Pixel", "16"),
+            sessions = firstLaunchSessions,
+            outbox = firstLaunchOutbox,
+            api = firstLaunchApi,
+            clock = Clock.fixed(Instant.parse("2026-08-02T10:15:30Z"), ZoneOffset.UTC),
+        )
+
+        assertTrue(
+            firstLaunchCoordinator.enqueue(
+                OperationType.EVENT_TRACKED,
+                buildJsonObject { put("name", "app_started_offline") },
+            ),
+        )
+
+        assertEquals(0, firstLaunchApi.bootstrapRequests)
+        assertEquals(0, firstLaunchOutbox.operations.single().generation)
+
+        firstLaunchCoordinator.flush()
+
+        assertEquals(1, firstLaunchApi.bootstrapRequests)
+        assertTrue(firstLaunchOutbox.operations.isEmpty())
+    }
+
+    @Test
     fun `incomplete acknowledgements leave the reserved batch intact`() = runTest {
         coordinator.enqueue(OperationType.EVENT_TRACKED, buildJsonObject {})
         coordinator.enqueue(OperationType.EVENT_TRACKED, buildJsonObject {})
@@ -96,6 +161,49 @@ class OperationCoordinatorTest {
 
         assertTrue(failure is IllegalStateException)
         assertEquals(2, outbox.operations.size)
+    }
+
+    @Test
+    fun `issuing a binding code starts reconciliation from the current generation`() = runTest {
+        var poll: Pair<Long, String>? = null
+        val value = OperationCoordinator(
+            endpoint = URI.create("https://edge.test/v1/"),
+            appKey = "eng_app_test",
+            metadata = DeviceMetadata("fr-FR", "Europe/Paris", "1", "2", "3", "Pixel", "16"),
+            sessions = sessions,
+            outbox = outbox,
+            api = api,
+            onBindingCodeIssued = { generation, expiresAt -> poll = generation to expiresAt },
+        ).issueBindingCode()
+
+        assertEquals("binding-code", value)
+        assertEquals(3L to "2026-08-02T10:20:00Z", poll)
+    }
+
+    @Test
+    fun `profile mutation waits for the server confirmed binding generation`() = runTest {
+        val pendingCoordinator = OperationCoordinator(
+            endpoint = URI.create("https://edge.test/v1/"),
+            appKey = "eng_app_test",
+            metadata = DeviceMetadata("fr-FR", "Europe/Paris", "1", "2", "3", "Pixel", "16"),
+            sessions = sessions,
+            outbox = outbox,
+            api = api,
+            clock = Clock.fixed(Instant.parse("2026-08-02T10:15:30Z"), ZoneOffset.UTC),
+        )
+        pendingCoordinator.issueBindingCode()
+
+        val enqueue = async {
+            pendingCoordinator.enqueue(OperationType.PROFILE_ATTRIBUTES_EDITED, buildJsonObject {})
+        }
+        runCurrent()
+        assertTrue(outbox.operations.isEmpty())
+
+        sessions.saveSession(session.copy(generation = 4))
+        runCurrent()
+
+        assertTrue(enqueue.await())
+        assertEquals(4, outbox.operations.single().generation)
     }
 
     private class FakeSessionStore(initial: InstallationSession?) : SessionStore {
@@ -149,7 +257,11 @@ class OperationCoordinatorTest {
     private class FakeApi(private val bootstrapSession: InstallationSession) : MobileEdgeApi {
         val sent = mutableListOf<OperationBatchRequest>()
         var omitLastResult = false
-        override suspend fun bootstrap(endpoint: URI, appKey: String, request: BootstrapRequest) = bootstrapSession
+        var bootstrapRequests = 0
+        override suspend fun bootstrap(endpoint: URI, appKey: String, request: BootstrapRequest): InstallationSession {
+            bootstrapRequests += 1
+            return bootstrapSession
+        }
         override suspend fun issueBindingCode(endpoint: URI, credential: String) =
             BindingCodeResponse("binding-code", "2026-08-02T10:20:00Z")
 

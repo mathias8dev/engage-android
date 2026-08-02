@@ -41,11 +41,14 @@ import io.engage.sdk.spi.EngageSignal
 import io.engage.sdk.spi.EngageSyncModule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -55,6 +58,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import java.time.ZoneId
+import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -74,7 +78,9 @@ internal class CoreRuntime(
     private val mutableSignals = MutableSharedFlow<EngageSignal>(extraBufferCapacity = 64)
     private val syncModules = CopyOnWriteArraySet(CORE_SYNC_MODULES)
     private val startedModules = mutableSetOf<String>()
+    private val moduleInstances = CopyOnWriteArraySet<EngageModule>()
     private val refreshMutex = Mutex()
+    private var bindingPollJob: Job? = null
     private val refreshScheduler: RefreshScheduler by lazy {
         RefreshScheduler(
             scope = scope,
@@ -90,6 +96,7 @@ internal class CoreRuntime(
         outbox = outbox,
         api = api,
         onEnqueued = { refreshScheduler.requestAfterMutation() },
+        onBindingCodeIssued = ::startBindingPoll,
     )
     private val syncCoordinator = SyncCoordinator(config.endpoint, sessions, syncStore, api)
     @Suppress("unused")
@@ -97,7 +104,7 @@ internal class CoreRuntime(
 
     val installation: Installation = DefaultInstallation(sessions, operationCoordinator, scope)
     val profile: Profile = DefaultProfile(operationCoordinator, scope)
-    val eventsDelegate = DefaultEvents(operationCoordinator, features.enabled, mutableSignals, scope)
+    val eventsDelegate = DefaultEvents(operationCoordinator, features.enabled, sessions.privacy, mutableSignals, scope)
     val events: Events = eventsDelegate
     val actions: Actions = actionsDelegate
     val sdkFeatures: SdkFeatures = features
@@ -127,7 +134,10 @@ internal class CoreRuntime(
         operationCoordinator,
         api,
         scope,
-        onLocalDataWiped = { mutableSignals.tryEmit(EngageSignal.LocalDataWiped) },
+        onLocalDataWiped = {
+            moduleInstances.forEach { module -> module.wipe() }
+            mutableSignals.emit(EngageSignal.LocalDataWiped)
+        },
     )
     val privacyApi: Privacy = privacyDelegate
 
@@ -144,23 +154,44 @@ internal class CoreRuntime(
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
         privacyDelegate.replayPendingRevocation()
         scope.launch {
-            features.enabled.drop(1).collect { refreshScheduler.requestImmediate() }
+            features.enabled.drop(1).collect { enabled ->
+                if (SdkFeature.IN_APP !in enabled && SdkFeature.ANALYTICS !in enabled) {
+                    eventsDelegate.resetScreenContext()
+                }
+                refreshScheduler.requestImmediate()
+            }
         }
         scope.launch {
             privacy.drop(1).collect { state ->
-                if (state == PrivacyState.OPTED_IN) refreshScheduler.requestImmediate()
+                if (state == PrivacyState.OPTED_IN) {
+                    refreshScheduler.requestImmediate()
+                } else {
+                    bindingPollJob?.cancel()
+                    bindingPollJob = null
+                    eventsDelegate.resetScreenContext()
+                }
             }
         }
         if (privacy.value == PrivacyState.OPTED_IN) {
             refreshScheduler.requestImmediate()
         } else {
-            scope.launch { runCatching { operationCoordinator.flush() } }
+            scope.launch {
+                runCatching {
+                    operationCoordinator.enqueue(
+                        type = OperationType.PRIVACY_STATE_SET,
+                        payload = buildJsonObject { put("state", "OPTED_OUT") },
+                        allowWhileOptedOut = true,
+                    )
+                    operationCoordinator.flush()
+                }
+            }
         }
     }
 
     @Synchronized
     fun startModule(module: EngageModule) {
         if (!startedModules.add(module.id)) return
+        moduleInstances += module
         features.addAvailable(module.features)
         syncModules += module.syncModules.map { it.toInternal() }
         module.start(this)
@@ -168,23 +199,29 @@ internal class CoreRuntime(
     }
 
     override fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>> =
-        syncStore.snapshot.map { snapshot ->
-            snapshot.documents.filter { it.module == module.toInternal() }.map { document ->
-                EngageRemoteDocument(document.key, document.revision, document.payload)
+        combine(syncStore.snapshot, generation) { snapshot, activeGeneration ->
+            if (snapshot.generation != activeGeneration) {
+                emptyList()
+            } else {
+                snapshot.documents.filter { it.module == module.toInternal() }.map { document ->
+                    EngageRemoteDocument(document.key, document.revision, document.payload)
+                }
             }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    override suspend fun enqueue(operation: EngageModuleOperation) {
+    override suspend fun enqueue(operation: EngageModuleOperation): Boolean {
         val (type, payload) = operation.toWire()
-        operationCoordinator.enqueue(type, payload)
+        return operationCoordinator.enqueue(type, payload)
     }
 
     override suspend fun refresh() = refreshMutex.withLock {
         if (privacy.value != PrivacyState.OPTED_IN) return
         operationCoordinator.ensureInstallation()
-        operationCoordinator.flush()
         val enabled = enabledFeatures.value
-        syncCoordinator.refresh(syncModules.filterTo(mutableSetOf()) { it.requiredFeature() in enabled })
+        val modules = syncModules.filterTo(mutableSetOf()) { it.requiredFeature() in enabled }
+        val remote = syncCoordinator.reconcile()
+        operationCoordinator.flush()
+        syncCoordinator.synchronize(modules, remote)
     }
 
     override suspend fun executeAction(name: String, arguments: kotlinx.serialization.json.JsonObject): Boolean =
@@ -212,16 +249,33 @@ internal class CoreRuntime(
         return EngageHttpResponse(response.statusCode, response.body)
     }
 
+    private fun startBindingPoll(initialGeneration: Long, expiresAt: String) {
+        bindingPollJob?.cancel()
+        val expiration = runCatching { Instant.parse(expiresAt) }.getOrNull()
+            ?: Instant.now().plusSeconds(BINDING_CODE_FALLBACK_TTL_SECONDS)
+        bindingPollJob = scope.launch {
+            while (
+                sessions.privacy.value == PrivacyState.OPTED_IN &&
+                sessions.session.value?.generation == initialGeneration &&
+                Instant.now().isBefore(expiration)
+            ) {
+                delay(BINDING_POLL_INTERVAL_MILLIS)
+                runCatching { refresh() }
+            }
+            bindingPollJob = null
+        }
+    }
+
     override fun onStart(owner: LifecycleOwner) {
         eventsDelegate.onForeground()
-        mutableSignals.tryEmit(EngageSignal.AppOpened)
+        if (privacy.value == PrivacyState.OPTED_IN) mutableSignals.tryEmit(EngageSignal.AppOpened)
         refreshScheduler.setForeground(true)
         refreshScheduler.requestImmediate()
     }
 
     override fun onStop(owner: LifecycleOwner) {
         eventsDelegate.onBackground()
-        mutableSignals.tryEmit(EngageSignal.AppBackgrounded)
+        if (privacy.value == PrivacyState.OPTED_IN) mutableSignals.tryEmit(EngageSignal.AppBackgrounded)
         refreshScheduler.setForeground(false)
     }
 
@@ -231,6 +285,9 @@ internal class CoreRuntime(
         }
         is EngageModuleOperation.PushSubscriptionChanged -> OperationType.PUSH_SUBSCRIPTION_SET to buildJsonObject {
             put("state", if (optedIn) "OPTED_IN" else "OPTED_OUT")
+        }
+        is EngageModuleOperation.PushPermissionChanged -> OperationType.PUSH_PERMISSION_SET to buildJsonObject {
+            put("state", permission)
         }
         is EngageModuleOperation.Interaction -> OperationType.INTERACTION_TRACKED to buildJsonObject {
             put("experienceId", experienceId)
@@ -245,6 +302,8 @@ internal class CoreRuntime(
     }
 
     private companion object {
+        const val BINDING_POLL_INTERVAL_MILLIS = 2_000L
+        const val BINDING_CODE_FALLBACK_TTL_SECONDS = 5 * 60L
         val CORE_SYNC_MODULES = mutableSetOf(SdkModule.PREFERENCES, SdkModule.FEATURE_FLAGS)
 
         fun deviceMetadata(context: Context): DeviceMetadata {

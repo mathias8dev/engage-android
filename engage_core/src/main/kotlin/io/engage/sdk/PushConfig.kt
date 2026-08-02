@@ -20,6 +20,18 @@ public data class AndroidPushConfig(
     @ColorRes val accentColor: Int? = null,
     val defaultChannelKey: String,
     val channels: List<AndroidPushChannel>,
+    val categories: List<AndroidPushCategory> = emptyList(),
+)
+
+public data class AndroidPushCategory(
+    val key: String,
+    val actions: List<AndroidPushAction>,
+)
+
+public data class AndroidPushAction(
+    val key: String,
+    @StringRes val title: Int,
+    val opensApp: Boolean = false,
 )
 
 public data class AndroidPushChannel(
@@ -44,4 +56,3 @@ public sealed interface AndroidPushSound {
     public data object Silent : AndroidPushSound
     public data class Resource(@RawRes val resourceId: Int) : AndroidPushSound
 }
-

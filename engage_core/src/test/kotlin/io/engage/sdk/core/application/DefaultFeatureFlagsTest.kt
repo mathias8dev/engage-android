@@ -33,6 +33,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.net.URI
+import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class DefaultFeatureFlagsTest {
@@ -96,6 +97,53 @@ class DefaultFeatureFlagsTest {
 
         assertEquals(1, outbox.operations.distinctBy(SdkOperation::operationId).size)
         assertEquals(OperationType.FLAG_EXPOSED, outbox.operations.single().type)
+        UUID.fromString(outbox.operations.single().operationId)
+    }
+
+    @Test
+    fun `stale generation snapshot always returns fallback`() = runTest {
+        val session = InstallationSession(
+            "installation-1", "credential", "revocation", "recovery", 5,
+            PrivacyState.OPTED_IN, "OPTED_IN", "2026-08-02T12:00:00Z",
+        )
+        val sessions = FakeSessions(session)
+        val flags = DefaultFeatureFlags(
+            sessions,
+            FakeSyncStore(
+                StoredSyncSnapshot(
+                    generation = 4,
+                    documents = listOf(
+                        SyncDocument(
+                            SdkModule.FEATURE_FLAGS,
+                            "snapshot",
+                            12,
+                            buildJsonObject {
+                                put("flags", buildJsonObject {
+                                    put("checkout_v2", buildJsonObject {
+                                        put("type", "BOOLEAN")
+                                        put("value", true)
+                                        put("revision", 12)
+                                    })
+                                })
+                            },
+                        ),
+                    ),
+                ),
+            ),
+            MutableStateFlow(setOf(SdkFeature.FEATURE_FLAGS)),
+            OperationCoordinator(
+                URI.create("https://edge.test/v1/"),
+                "eng_app_test",
+                DeviceMetadata("fr", "UTC", "1", "1", null, null, null),
+                sessions,
+                FakeOutbox(),
+                UnusedApi,
+            ),
+            InMemoryExposures(),
+            this,
+        )
+
+        assertFalse(flags.getBoolean("checkout_v2", false))
     }
 
     @Test

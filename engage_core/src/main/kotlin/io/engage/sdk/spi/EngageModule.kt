@@ -18,6 +18,9 @@ public interface EngageModule {
     public val syncModules: Set<EngageSyncModule>
 
     public fun start(context: EngageModuleContext)
+
+    /** Durably removes every functional value owned by this module before a privacy wipe returns. */
+    public suspend fun wipe() = Unit
 }
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
@@ -47,6 +50,7 @@ public sealed interface EngageSignal {
 public sealed interface EngageModuleOperation {
     public data class PushTokenChanged(val token: String?) : EngageModuleOperation
     public data class PushSubscriptionChanged(val optedIn: Boolean) : EngageModuleOperation
+    public data class PushPermissionChanged(val permission: String) : EngageModuleOperation
 
     public data class Interaction(
         val experienceId: String,
@@ -95,7 +99,8 @@ public interface EngageModuleContext {
     public val signals: SharedFlow<EngageSignal>
 
     public fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>>
-    public suspend fun enqueue(operation: EngageModuleOperation)
+    /** Returns true only after the operation has been accepted by the durable core outbox. */
+    public suspend fun enqueue(operation: EngageModuleOperation): Boolean
     public suspend fun refresh()
     public suspend fun executeAction(name: String, arguments: JsonObject): Boolean
     public suspend fun authorizedRequest(request: EngageHttpRequest): EngageHttpResponse =

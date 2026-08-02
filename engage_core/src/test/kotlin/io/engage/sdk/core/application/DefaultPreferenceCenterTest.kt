@@ -122,7 +122,18 @@ class DefaultPreferenceCenterTest {
     )
 
     private class FakeSessions : SessionStore {
-        override val session = MutableStateFlow<InstallationSession?>(null)
+        override val session = MutableStateFlow<InstallationSession?>(
+            InstallationSession(
+                installationId = "installation-1",
+                credential = "credential",
+                revocationCredential = "revocation",
+                recoveryToken = "recovery",
+                generation = 1,
+                privacy = PrivacyState.OPTED_IN,
+                pushSubscription = "OPTED_IN",
+                serverTime = "2026-08-02T12:00:00Z",
+            ),
+        )
         override val privacy = MutableStateFlow(PrivacyState.OPTED_IN)
         override suspend fun recoveryToken(): String? = null
         override suspend fun saveSession(session: InstallationSession) { this.session.value = session }

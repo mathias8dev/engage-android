@@ -37,6 +37,35 @@ import java.net.URI
 @OptIn(ExperimentalCoroutinesApi::class)
 class DefaultPrivacyTest {
     @Test
+    fun `opt out is in the durable outbox before the call returns`() = runTest {
+        val session = InstallationSession(
+            "installation-1", "credential", "limited-revocation", "recovery", 7,
+            PrivacyState.OPTED_IN, "OPTED_IN", "2026-08-02T12:00:00Z",
+        )
+        val sessions = FakeSessions(session)
+        val outbox = FakeOutbox()
+        val endpoint = URI.create("https://edge.test/v1/")
+        val coordinator = OperationCoordinator(
+            endpoint,
+            "eng_app_test",
+            DeviceMetadata("fr", "UTC", "1", "1", null, null, null),
+            sessions,
+            outbox,
+            FailingRevocationApi,
+        )
+        val privacy = DefaultPrivacy(
+            endpoint, sessions, outbox, FakeSyncStore(), FakeExposures(), FakeRevocations(),
+            coordinator, FailingRevocationApi, backgroundScope,
+        )
+
+        privacy.optOut()
+
+        assertEquals(PrivacyState.OPTED_OUT, privacy.state.value)
+        assertEquals(OperationType.PRIVACY_STATE_SET, outbox.pending.value.single().type)
+        assertEquals("\"OPTED_OUT\"", outbox.pending.value.single().payload["state"].toString())
+    }
+
+    @Test
     fun `wipe persists isolated revocation before clearing every functional store`() = runTest {
         val session = InstallationSession(
             "installation-1",
@@ -135,10 +164,11 @@ class DefaultPrivacyTest {
     }
 
     private class FakeRevocations : RevocationStore {
-        var envelope: RevocationEnvelope? = null
+        private val envelopes = linkedMapOf<String, RevocationEnvelope>()
+        val envelope: RevocationEnvelope? get() = envelopes.values.firstOrNull()
         override suspend fun get() = envelope
-        override suspend fun save(envelope: RevocationEnvelope) { this.envelope = envelope }
-        override suspend fun clear() { envelope = null }
+        override suspend fun save(envelope: RevocationEnvelope) { envelopes[envelope.operationId] = envelope }
+        override suspend fun clear(operationId: String) { envelopes.remove(operationId) }
     }
 
     private object FailingRevocationApi : MobileEdgeApi {

@@ -57,11 +57,23 @@ internal class DefaultPreferenceCenter(
     }
 
     private fun flowFor(key: String): StateFlow<PreferenceCenterSnapshot?> = flows.getOrPut(key) {
-        combine(syncStore.snapshot, outbox.pending, sessions.privacy, features) { snapshot, pending, privacy, enabled ->
-            if (privacy != PrivacyState.OPTED_IN || SdkFeature.PREFERENCES !in enabled) {
+        combine(
+            syncStore.snapshot,
+            outbox.pending,
+            sessions.session,
+            sessions.privacy,
+            features,
+        ) { snapshot, pending, session, privacy, enabled ->
+            if (
+                privacy != PrivacyState.OPTED_IN ||
+                SdkFeature.PREFERENCES !in enabled ||
+                session == null ||
+                snapshot.generation != session.generation
+            ) {
                 null
             } else {
-                PreferenceProjection(snapshot, pending).center(key.takeUnless { it == DEFAULT_CENTER })
+                PreferenceProjection(snapshot, pending, session.generation)
+                    .center(key.takeUnless { it == DEFAULT_CENTER })
             }
         }.stateIn(scope, SharingStarted.Eagerly, null)
     }
@@ -83,6 +95,7 @@ internal class DefaultPreferenceCenter(
 private class PreferenceProjection(
     snapshot: StoredSyncSnapshot,
     pending: List<io.engage.sdk.core.domain.SdkOperation>,
+    activeGeneration: Long,
 ) {
     private val payload = snapshot.documents.firstOrNull {
         it.module == SdkModule.PREFERENCES && it.key == "subscriptions"
@@ -114,13 +127,15 @@ private class PreferenceProjection(
                         installationChoices[list] = subscribed
                     }
                 OperationType.PROFILE_SUBSCRIPTIONS_EDITED ->
-                    (operation.payload["changes"] as? JsonArray).orEmptyObjects().forEach { change ->
-                        val list = change.string("list") ?: return@forEach
-                        val channel = change.string("channel")?.let {
-                            runCatching { Channel.valueOf(it) }.getOrNull()
-                        } ?: return@forEach
-                        val subscribed = change.boolean("subscribed") ?: return@forEach
-                        profileChoices[list to channel] = subscribed
+                    if (operation.generation == activeGeneration) {
+                        (operation.payload["changes"] as? JsonArray).orEmptyObjects().forEach { change ->
+                            val list = change.string("list") ?: return@forEach
+                            val channel = change.string("channel")?.let {
+                                runCatching { Channel.valueOf(it) }.getOrNull()
+                            } ?: return@forEach
+                            val subscribed = change.boolean("subscribed") ?: return@forEach
+                            profileChoices[list to channel] = subscribed
+                        }
                     }
                 else -> Unit
             }
@@ -190,4 +205,3 @@ private fun localized(element: JsonElement?): String? = when (element) {
     }
     else -> null
 }
-

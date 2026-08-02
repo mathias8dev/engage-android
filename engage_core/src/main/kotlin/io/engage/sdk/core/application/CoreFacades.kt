@@ -7,6 +7,7 @@ import io.engage.sdk.Installation
 import io.engage.sdk.InstallationSubscriptionEditor
 import io.engage.sdk.Profile
 import io.engage.sdk.ProfileSubscriptionEditor
+import io.engage.sdk.PrivacyState
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.TagEditor
 import io.engage.sdk.core.domain.OperationType
@@ -135,6 +136,7 @@ internal class DefaultProfile(
 internal class DefaultEvents(
     private val coordinator: OperationCoordinator,
     private val features: StateFlow<Set<SdkFeature>>,
+    private val privacy: StateFlow<PrivacyState>,
     private val signals: MutableSharedFlow<EngageSignal>,
     private val scope: CoroutineScope,
     private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
@@ -147,6 +149,7 @@ internal class DefaultEvents(
     override fun track(name: String, block: io.engage.sdk.EventEditor.() -> Unit) {
         io.engage.sdk.validateEventName(name)
         val event = io.engage.sdk.EventEditor().apply(block).build()
+        if (privacy.value != PrivacyState.OPTED_IN) return
         val properties = JsonObject(event.properties)
         if (SdkFeature.IN_APP in features.value) {
             signals.tryEmit(EngageSignal.EventOccurred(name, properties))
@@ -167,6 +170,7 @@ internal class DefaultEvents(
 
     override fun trackScreen(screenKey: String) {
         io.engage.sdk.validateScreenKey(screenKey)
+        if (!screenCollectionEnabled()) return
         if (screenKey == currentScreen) return
         val now = elapsedRealtime()
         val previousDuration = visibleSince?.let { accumulatedVisibleMillis + (now - it).coerceAtLeast(0) }
@@ -189,25 +193,53 @@ internal class DefaultEvents(
     }
 
     override fun clearScreen() {
+        if (!screenCollectionEnabled()) return
+        val screenKey = currentScreen ?: return
+        val now = elapsedRealtime()
+        val visibleDuration = visibleSince?.let { accumulatedVisibleMillis + (now - it).coerceAtLeast(0) }
+            ?: accumulatedVisibleMillis
         currentScreen = null
         previousScreen = null
         visibleSince = null
         accumulatedVisibleMillis = 0
         if (SdkFeature.IN_APP in features.value) signals.tryEmit(EngageSignal.ScreenCleared)
+        if (SdkFeature.ANALYTICS in features.value) {
+            scope.launch {
+                coordinator.enqueue(
+                    OperationType.SCREEN_CLEARED,
+                    buildJsonObject {
+                        put("screenKey", screenKey)
+                        put("visibleDurationMillis", visibleDuration)
+                    },
+                )
+            }
+        }
     }
 
     fun onBackground() {
+        if (!screenCollectionEnabled()) return
         val since = visibleSince ?: return
         accumulatedVisibleMillis += (elapsedRealtime() - since).coerceAtLeast(0)
         visibleSince = null
     }
 
     fun onForeground() {
+        if (!screenCollectionEnabled()) return
         if (currentScreen != null && visibleSince == null) visibleSince = elapsedRealtime()
     }
+
+    fun resetScreenContext() {
+        currentScreen = null
+        previousScreen = null
+        visibleSince = null
+        accumulatedVisibleMillis = 0
+    }
+
+    private fun screenCollectionEnabled(): Boolean =
+        privacy.value == PrivacyState.OPTED_IN &&
+            (SdkFeature.IN_APP in features.value || SdkFeature.ANALYTICS in features.value)
 
     override suspend fun flush() = coordinator.flush()
 }
 
 private fun Set<String>.asJsonArray(): JsonArray = JsonArray(map(::JsonPrimitive))
-

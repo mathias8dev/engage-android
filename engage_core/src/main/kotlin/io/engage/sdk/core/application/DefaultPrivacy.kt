@@ -35,7 +35,7 @@ internal class DefaultPrivacy(
     private val api: MobileEdgeApi,
     private val scope: CoroutineScope,
     private val newId: () -> String = { UUID.randomUUID().toString() },
-    private val onLocalDataWiped: () -> Unit = {},
+    private val onLocalDataWiped: suspend () -> Unit = {},
 ) : Privacy {
     private val mutex = Mutex()
     private var revocationJob: Job? = null
@@ -45,14 +45,12 @@ internal class DefaultPrivacy(
     override suspend fun optOut(): Unit = mutex.withLock {
         if (state.value == PrivacyState.OPTED_OUT) return@withLock
         sessions.setPrivacy(PrivacyState.OPTED_OUT)
-        scope.launch {
-            coordinator.enqueue(
-                type = OperationType.PRIVACY_STATE_SET,
-                payload = buildJsonObject { put("state", "OPTED_OUT") },
-                allowWhileOptedOut = true,
-            )
-            coordinator.flush()
-        }
+        coordinator.enqueue(
+            type = OperationType.PRIVACY_STATE_SET,
+            payload = buildJsonObject { put("state", "OPTED_OUT") },
+            allowWhileOptedOut = true,
+        )
+        scope.launch { coordinator.flush() }
     }
 
     override suspend fun optIn(): Unit = mutex.withLock {
@@ -70,11 +68,11 @@ internal class DefaultPrivacy(
     }
 
     override suspend fun optOutAndWipe(): Unit = mutex.withLock {
-        sessions.setPrivacy(PrivacyState.OPTED_OUT)
         val session = coordinator.prepareWipe()
         if (session != null) {
             revocations.save(RevocationEnvelope(newId(), session.revocationCredential))
         }
+        sessions.setPrivacy(PrivacyState.OPTED_OUT)
         outbox.clear()
         syncStore.clear()
         exposures.clear()
@@ -93,8 +91,9 @@ internal class DefaultPrivacy(
                     api.revoke(endpoint, envelope.credential, envelope.operationId)
                 }.isSuccess
                 if (completed) {
-                    revocations.clear()
-                    break
+                    revocations.clear(envelope.operationId)
+                    backoffMillis = INITIAL_BACKOFF_MILLIS
+                    continue
                 }
                 delay(backoffMillis)
                 backoffMillis = min(backoffMillis * 2, MAX_BACKOFF_MILLIS)

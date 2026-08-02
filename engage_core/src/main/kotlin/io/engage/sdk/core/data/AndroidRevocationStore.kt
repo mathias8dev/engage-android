@@ -15,35 +15,41 @@ internal class AndroidRevocationStore(context: Context) : RevocationStore {
 
     override suspend fun get(): RevocationEnvelope? = mutex.withLock {
         withContext(Dispatchers.IO) {
-            val operationId = preferences.getString(OPERATION_ID, null) ?: return@withContext null
-            val credential = secrets.get(CREDENTIAL) ?: return@withContext null
+            val operationId = preferences.getStringSet(OPERATION_IDS, emptySet()).orEmpty().minOrNull()
+                ?: return@withContext null
+            val credential = secrets.get(credentialKey(operationId)) ?: return@withContext null
             RevocationEnvelope(operationId, credential)
         }
     }
 
     override suspend fun save(envelope: RevocationEnvelope): Unit = mutex.withLock {
         withContext(Dispatchers.IO) {
-            check(secrets.put(CREDENTIAL, envelope.credential)) { "Could not persist revocation credential" }
-            check(preferences.edit().putString(OPERATION_ID, envelope.operationId).commit()) {
+            check(secrets.put(credentialKey(envelope.operationId), envelope.credential)) {
+                "Could not persist revocation credential"
+            }
+            val ids = preferences.getStringSet(OPERATION_IDS, emptySet()).orEmpty() + envelope.operationId
+            check(preferences.edit().putStringSet(OPERATION_IDS, ids).commit()) {
                 "Could not persist revocation operation"
             }
         }
     }
 
-    override suspend fun clear(): Unit = mutex.withLock {
+    override suspend fun clear(operationId: String): Unit = mutex.withLock {
         withContext(Dispatchers.IO) {
-            secrets.remove(CREDENTIAL)
-            check(preferences.edit().remove(OPERATION_ID).commit()) {
+            secrets.remove(credentialKey(operationId))
+            val ids = preferences.getStringSet(OPERATION_IDS, emptySet()).orEmpty() - operationId
+            check(preferences.edit().putStringSet(OPERATION_IDS, ids).commit()) {
                 "Could not clear revocation operation"
             }
         }
     }
 
+    private fun credentialKey(operationId: String): String = "$CREDENTIAL_PREFIX$operationId"
+
     private companion object {
         const val STORE = "engage_revocation_envelope"
-        const val OPERATION_ID = "operation_id"
-        const val CREDENTIAL = "credential"
+        const val OPERATION_IDS = "operation_ids"
+        const val CREDENTIAL_PREFIX = "credential."
         const val REVOCATION_KEY_ALIAS = "io.engage.sdk.revocation.v1"
     }
 }
-
