@@ -19,7 +19,7 @@ internal class SyncCoordinator(
     private val mutex = Mutex()
 
     suspend fun refresh(modules: Set<SdkModule>) = mutex.withLock {
-        if (modules.isEmpty() || sessions.privacy.value == PrivacyState.OPTED_OUT) return@withLock
+        if (sessions.privacy.value == PrivacyState.OPTED_OUT) return@withLock
         val session = sessions.session.value ?: return@withLock
         val remote = api.getInstallation(endpoint, session.credential)
         if (remote.generation != session.generation || remote.privacy != session.privacy) {
@@ -33,7 +33,7 @@ internal class SyncCoordinator(
             )
             store.clear()
         }
-        if (remote.privacy == PrivacyState.OPTED_OUT) return@withLock
+        if (remote.privacy == PrivacyState.OPTED_OUT || modules.isEmpty()) return@withLock
         val current = store.snapshot.value
         val response = api.synchronize(
             endpoint,
@@ -47,4 +47,3 @@ internal class SyncCoordinator(
         store.apply(modules, response)
     }
 }
-

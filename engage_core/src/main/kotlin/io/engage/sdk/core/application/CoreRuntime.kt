@@ -2,6 +2,9 @@ package io.engage.sdk.core.application
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkRequest
 import android.os.Build
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -15,6 +18,7 @@ import io.engage.sdk.PrivacyState
 import io.engage.sdk.PreferenceCenter
 import io.engage.sdk.Privacy
 import io.engage.sdk.Profile
+import io.engage.sdk.SdkFeature
 import io.engage.sdk.SdkFeatures
 import io.engage.sdk.core.BuildConfig
 import io.engage.sdk.core.data.AndroidSessionStore
@@ -41,14 +45,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import java.time.ZoneId
 import java.util.Locale
+import java.util.concurrent.CopyOnWriteArraySet
 
 internal class CoreRuntime(
     override val applicationContext: Context,
@@ -64,17 +72,28 @@ internal class CoreRuntime(
     private val features = DefaultSdkFeatures(applicationContext)
     private val actionsDelegate = DefaultActions()
     private val mutableSignals = MutableSharedFlow<EngageSignal>(extraBufferCapacity = 64)
-    private val syncModules = CORE_SYNC_MODULES.toMutableSet()
+    private val syncModules = CopyOnWriteArraySet(CORE_SYNC_MODULES)
     private val startedModules = mutableSetOf<String>()
-    private val operationCoordinator = OperationCoordinator(
+    private val refreshMutex = Mutex()
+    private val refreshScheduler: RefreshScheduler by lazy {
+        RefreshScheduler(
+            scope = scope,
+            refreshAfterSeconds = syncStore.snapshot.map { it.refreshAfterSeconds },
+            refresh = ::refresh,
+        )
+    }
+    private val operationCoordinator: OperationCoordinator = OperationCoordinator(
         endpoint = config.endpoint,
         appKey = config.appKey,
         metadata = deviceMetadata(applicationContext),
         sessions = sessions,
         outbox = outbox,
         api = api,
+        onEnqueued = { refreshScheduler.requestAfterMutation() },
     )
     private val syncCoordinator = SyncCoordinator(config.endpoint, sessions, syncStore, api)
+    @Suppress("unused")
+    private lateinit var connectivityMonitor: ConnectivityMonitor
 
     val installation: Installation = DefaultInstallation(sessions, operationCoordinator, scope)
     val profile: Profile = DefaultProfile(operationCoordinator, scope)
@@ -121,10 +140,19 @@ internal class CoreRuntime(
     override val signals = mutableSignals
 
     init {
+        connectivityMonitor = ConnectivityMonitor(applicationContext, refreshScheduler::requestImmediate)
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
         privacyDelegate.replayPendingRevocation()
+        scope.launch {
+            features.enabled.drop(1).collect { refreshScheduler.requestImmediate() }
+        }
+        scope.launch {
+            privacy.drop(1).collect { state ->
+                if (state == PrivacyState.OPTED_IN) refreshScheduler.requestImmediate()
+            }
+        }
         if (privacy.value == PrivacyState.OPTED_IN) {
-            refreshInBackground()
+            refreshScheduler.requestImmediate()
         } else {
             scope.launch { runCatching { operationCoordinator.flush() } }
         }
@@ -136,7 +164,7 @@ internal class CoreRuntime(
         features.addAvailable(module.features)
         syncModules += module.syncModules.map { it.toInternal() }
         module.start(this)
-        refreshInBackground()
+        refreshScheduler.requestImmediate()
     }
 
     override fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>> =
@@ -151,11 +179,12 @@ internal class CoreRuntime(
         operationCoordinator.enqueue(type, payload)
     }
 
-    override suspend fun refresh() {
+    override suspend fun refresh() = refreshMutex.withLock {
         if (privacy.value != PrivacyState.OPTED_IN) return
         operationCoordinator.ensureInstallation()
         operationCoordinator.flush()
-        syncCoordinator.refresh(syncModules.toSet())
+        val enabled = enabledFeatures.value
+        syncCoordinator.refresh(syncModules.filterTo(mutableSetOf()) { it.requiredFeature() in enabled })
     }
 
     override suspend fun executeAction(name: String, arguments: kotlinx.serialization.json.JsonObject): Boolean =
@@ -186,16 +215,14 @@ internal class CoreRuntime(
     override fun onStart(owner: LifecycleOwner) {
         eventsDelegate.onForeground()
         mutableSignals.tryEmit(EngageSignal.AppOpened)
-        refreshInBackground()
+        refreshScheduler.setForeground(true)
+        refreshScheduler.requestImmediate()
     }
 
     override fun onStop(owner: LifecycleOwner) {
         eventsDelegate.onBackground()
         mutableSignals.tryEmit(EngageSignal.AppBackgrounded)
-    }
-
-    private fun refreshInBackground() {
-        scope.launch { runCatching { refresh() } }
+        refreshScheduler.setForeground(false)
     }
 
     private fun EngageModuleOperation.toWire() = when (this) {
@@ -249,3 +276,27 @@ internal class CoreRuntime(
 }
 
 private fun EngageSyncModule.toInternal(): SdkModule = SdkModule.valueOf(name)
+
+private fun SdkModule.requiredFeature(): SdkFeature = when (this) {
+    SdkModule.PUSH -> SdkFeature.PUSH
+    SdkModule.IN_APP -> SdkFeature.IN_APP
+    SdkModule.PREFERENCES -> SdkFeature.PREFERENCES
+    SdkModule.FEATURE_FLAGS -> SdkFeature.FEATURE_FLAGS
+}
+
+private class ConnectivityMonitor(context: Context, notifyAvailable: () -> Unit) {
+    private val callback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = notifyAvailable()
+    }
+
+    init {
+        runCatching {
+            val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                manager.registerDefaultNetworkCallback(callback)
+            } else {
+                manager.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
+            }
+        }
+    }
+}
