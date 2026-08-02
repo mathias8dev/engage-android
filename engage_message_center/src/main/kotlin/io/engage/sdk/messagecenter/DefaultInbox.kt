@@ -109,9 +109,7 @@ internal class DefaultInbox(
                     store.activateGeneration(runtime.generation)
                     enabled.value = runtime.enabled
                     if (changed) pagers.forEach { it.onGenerationChanged(runtime.generation) }
-                    if (runtime.enabled) {
-                        if (changed) context.scope.launch { flushMutations() } else catchUp()
-                    }
+                    if (runtime.enabled) catchUp()
                 } else {
                     enabled.value = false
                 }
@@ -166,6 +164,12 @@ internal class DefaultInbox(
         enqueue(MutationType.DELETE, entryId.value)
     }
 
+    suspend fun wipe() {
+        enabled.value = false
+        store.clear()
+        pagers.forEach { it.onGenerationChanged(context.generation.value) }
+    }
+
     private suspend fun enqueue(type: MutationType, entryId: String?) {
         if (!enabled.value) return
         globalError.value = null
@@ -186,7 +190,22 @@ internal class DefaultInbox(
     private fun catchUp() {
         if (!enabled.value) return
         context.scope.launch { flushMutations() }
+        context.scope.launch { refreshUnreadCount() }
         pagers.forEach { pager -> context.scope.launch { pager.refresh() } }
+    }
+
+    private suspend fun refreshUnreadCount() {
+        val generation = activeGeneration.value
+        try {
+            fetchPage(generation, DEFAULT_PAGE_SIZE, null)
+            clearRetryableGlobalError()
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            globalError.value = error.toInboxError()
+            if (error is InboxHttpException && error.statusCode == 409) {
+                runCatching { context.refresh() }
+            }
+        }
     }
 
     private suspend fun flushMutations() = flushMutex.withLock {
@@ -271,6 +290,10 @@ internal class DefaultInbox(
 
     private data class RuntimeState(val generation: Long, val enabled: Boolean, val hasInstallation: Boolean)
     private data class PageRequest(val generation: Long, val pageSize: Int, val cursor: String?)
+
+    private companion object {
+        const val DEFAULT_PAGE_SIZE = 20
+    }
 }
 
 internal data class InboxProjectionState(

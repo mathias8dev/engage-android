@@ -20,6 +20,10 @@ internal object EngageMessageCenterModule : EngageModule {
         if (api == null) api = DefaultMessageCenter(context)
     }
 
+    override suspend fun wipe() {
+        (api as? DefaultMessageCenter)?.wipe()
+    }
+
     fun requireApi(): MessageCenter = checkNotNull(api) {
         "engage-message-center is installed but Engage.start(context, config) has not completed"
     }
@@ -36,4 +40,3 @@ public class EngageMessageCenterInitProvider : ContentProvider() {
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
 }
-

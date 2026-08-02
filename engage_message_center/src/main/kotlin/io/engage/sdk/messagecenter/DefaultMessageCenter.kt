@@ -25,4 +25,8 @@ internal class DefaultMessageCenter(private val context: EngageModuleContext) : 
 
     override suspend fun executeAction(name: String, arguments: JsonObject): Boolean =
         context.executeAction(name, arguments)
+
+    suspend fun wipe() {
+        (inbox as DefaultInbox).wipe()
+    }
 }

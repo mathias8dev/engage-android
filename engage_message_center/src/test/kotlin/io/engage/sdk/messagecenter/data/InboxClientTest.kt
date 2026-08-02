@@ -127,7 +127,7 @@ private class ClientContext(override val scope: CoroutineScope) : EngageModuleCo
     lateinit var response: EngageHttpResponse
 
     override fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>> = MutableStateFlow(emptyList())
-    override suspend fun enqueue(operation: EngageModuleOperation) = Unit
+    override suspend fun enqueue(operation: EngageModuleOperation) = true
     override suspend fun refresh() = Unit
     override suspend fun executeAction(name: String, arguments: JsonObject): Boolean = false
     override suspend fun authorizedRequest(request: EngageHttpRequest): EngageHttpResponse {

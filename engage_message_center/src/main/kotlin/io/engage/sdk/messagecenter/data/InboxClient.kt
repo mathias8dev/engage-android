@@ -91,9 +91,13 @@ internal class InboxClient(private val context: EngageModuleContext) {
                 message = result.string("message"),
             )
         }
-        if (results.mapTo(mutableSetOf(), MutationResult::operationId) !=
-            batch.operations.mapTo(mutableSetOf(), PendingMutation::operationId)
-        ) invalidResponse("Inbox returned incomplete mutation results")
+        val expectedIds = batch.operations.map(PendingMutation::operationId)
+        val returnedIds = results.map(MutationResult::operationId)
+        if (
+            returnedIds.size != returnedIds.toSet().size ||
+            returnedIds.size != expectedIds.size ||
+            returnedIds.toSet() != expectedIds.toSet()
+        ) invalidResponse("Inbox returned incomplete or duplicate mutation results")
         return results
     }
 
@@ -120,7 +124,10 @@ internal class InboxClient(private val context: EngageModuleContext) {
                 document = rendering["document"] as? JsonObject ?: invalidResponse("Rendering document is missing"),
             )
         }
-        if (renderings.any { it.entryId !in requestedIds }) {
+        if (
+            renderings.map(InboxRendering::entryId).let { ids -> ids.size != ids.toSet().size } ||
+            renderings.any { it.entryId !in requestedIds }
+        ) {
             invalidResponse("Inbox returned a rendering that was not requested")
         }
         if (renderings.map(InboxRendering::entryId).distinct().size != renderings.size) {

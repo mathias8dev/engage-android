@@ -43,6 +43,26 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class DefaultInboxTest {
     @Test
+    fun `unread count synchronizes without creating a pager`() = runTest {
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
+        appContext.deleteDatabase("engage_message_center.db")
+        val moduleContext = RuntimeContext(backgroundScope, CompletableDeferred(Unit))
+        val store = SqliteInboxStore(appContext)
+        val inbox = DefaultInbox(
+            context = moduleContext,
+            store = store,
+            client = InboxClient(moduleContext),
+        )
+
+        runCurrent()
+
+        assertEquals(1, moduleContext.pageRequests)
+        assertEquals(1, inbox.unreadCount.value)
+        store.close()
+        appContext.deleteDatabase("engage_message_center.db")
+    }
+
+    @Test
     fun `pagers deduplicate fetches and share optimistic mutations`() = runTest {
         val appContext = ApplicationProvider.getApplicationContext<Context>()
         appContext.deleteDatabase("engage_message_center.db")
@@ -102,7 +122,7 @@ private class RuntimeContext(
     var mutationRequests = 0
 
     override fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>> = MutableStateFlow(emptyList())
-    override suspend fun enqueue(operation: EngageModuleOperation) = Unit
+    override suspend fun enqueue(operation: EngageModuleOperation) = true
     override suspend fun refresh() = Unit
     override suspend fun executeAction(name: String, arguments: JsonObject): Boolean = true
 
