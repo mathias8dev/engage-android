@@ -32,6 +32,13 @@ public sealed interface PushEvent {
         val deliveryId: String,
         val messageId: String,
     ) : PushEvent
+
+    public data class ActionSelected(
+        val deliveryId: String,
+        val messageId: String,
+        val actionKey: String,
+        val data: Map<String, String>,
+    ) : PushEvent
 }
 
 public interface Push {
@@ -43,4 +50,3 @@ public interface Push {
 }
 
 public val Engage.push: Push get() = EngagePushModule.requireApi()
-

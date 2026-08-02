@@ -21,5 +21,8 @@
         <receiver
             android:name="io.engage.sdk.push.fcm.EngagePushDismissReceiver"
             android:exported="false" />
+        <receiver
+            android:name="io.engage.sdk.push.fcm.EngagePushActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

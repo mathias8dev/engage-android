@@ -36,6 +36,31 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class DefaultPushTest {
     @Test
+    fun `permission is retried when the durable outbox rejects the first enqueue`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
+        val context = FakeModuleContext(application, backgroundScope).apply { acceptOperations = false }
+        DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+        )
+        runCurrent()
+
+        assertTrue(context.operations.isEmpty())
+
+        context.acceptOperations = true
+        context.mutableSignals.emit(EngageSignal.AppOpened)
+        runCurrent()
+
+        assertEquals(
+            listOf(PushPermission.AUTHORIZED.name),
+            context.operations.filterIsInstance<EngageModuleOperation.PushPermissionChanged>().map { it.permission },
+        )
+        application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
+    }
+
+    @Test
     fun `concurrent startup signals enqueue one token and await server registration`() = runTest {
         val application = ApplicationProvider.getApplicationContext<Application>()
         application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
@@ -49,6 +74,10 @@ class DefaultPushTest {
         runCurrent()
 
         assertEquals(1, context.operations.filterIsInstance<EngageModuleOperation.PushTokenChanged>().size)
+        assertEquals(
+            listOf(PushPermission.AUTHORIZED.name),
+            context.operations.filterIsInstance<EngageModuleOperation.PushPermissionChanged>().map { it.permission },
+        )
         assertFalse(push.status.value.tokenRegistered)
 
         context.pushDocuments.value = listOf(
@@ -73,13 +102,16 @@ class DefaultPushTest {
         override val generation = MutableStateFlow(1L)
         override val privacy = MutableStateFlow(PrivacyState.OPTED_IN)
         override val enabledFeatures = MutableStateFlow(setOf(SdkFeature.PUSH))
-        override val signals: SharedFlow<EngageSignal> = MutableSharedFlow(extraBufferCapacity = 8)
+        val mutableSignals = MutableSharedFlow<EngageSignal>(extraBufferCapacity = 8)
+        override val signals: SharedFlow<EngageSignal> = mutableSignals
         val pushDocuments = MutableStateFlow<List<EngageRemoteDocument>>(emptyList())
         val operations = mutableListOf<EngageModuleOperation>()
+        var acceptOperations = true
 
         override fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>> = pushDocuments
-        override suspend fun enqueue(operation: EngageModuleOperation) {
-            operations += operation
+        override suspend fun enqueue(operation: EngageModuleOperation): Boolean {
+            if (acceptOperations) operations += operation
+            return acceptOperations
         }
         override suspend fun refresh() = Unit
         override suspend fun executeAction(name: String, arguments: JsonObject): Boolean = true

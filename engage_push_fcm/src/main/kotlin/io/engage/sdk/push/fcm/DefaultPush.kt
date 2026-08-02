@@ -71,6 +71,8 @@ internal class DefaultPush(
     private var appInForeground = false
     private var previousPrivacy = moduleContext.privacy.value
     private val tokenMutex = Mutex()
+    private val permissionMutex = Mutex()
+    private val subscriptionMutex = Mutex()
 
     override val status: StateFlow<PushStatus> = mutableStatus
     override val events: SharedFlow<PushEvent> = mutableEvents
@@ -83,6 +85,14 @@ internal class DefaultPush(
                 val state = documents.firstOrNull { it.key == "state" }?.payload
                 val registered = (state?.get("tokenRegistered") as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
                 if (registered != null) mutableStatus.value = mutableStatus.value.copy(tokenRegistered = registered)
+                val subscription = (state?.get("subscription") as? JsonPrimitive)?.content
+                    ?.let { value -> runCatching { PushSubscriptionState.valueOf(value) }.getOrNull() }
+                if (subscription != null && !preferences.getBoolean(PENDING_SUBSCRIPTION, false)) {
+                    check(preferences.edit().putString(SUBSCRIPTION, subscription.name).commit()) {
+                        "Could not persist Engage push subscription state"
+                    }
+                    mutableStatus.value = mutableStatus.value.copy(subscription = subscription)
+                }
             }
         }
         moduleContext.scope.launch {
@@ -90,10 +100,12 @@ internal class DefaultPush(
                 when (signal) {
                     EngageSignal.AppOpened -> {
                         appInForeground = true
-                        refreshPermission()
+                        synchronizePermission()
+                        synchronizeSubscription()
                         synchronizeToken()
                     }
                     EngageSignal.AppBackgrounded -> appInForeground = false
+                    EngageSignal.LocalDataWiped -> wipe()
                     else -> Unit
                 }
             }
@@ -104,27 +116,37 @@ internal class DefaultPush(
         moduleContext.scope.launch {
             moduleContext.privacy.collectLatest { privacy ->
                 if (previousPrivacy == PrivacyState.OPTED_OUT && privacy == PrivacyState.OPTED_IN) {
-                    moduleContext.enqueue(
-                        EngageModuleOperation.PushSubscriptionChanged(
-                            optedIn = mutableStatus.value.subscription == PushSubscriptionState.OPTED_IN,
-                        ),
-                    )
+                    synchronizeSubscription(force = true)
+                    synchronizePermission()
                     synchronizeToken()
                 }
                 previousPrivacy = privacy
             }
         }
-        moduleContext.scope.launch { synchronizeToken() }
+        moduleContext.scope.launch {
+            synchronizePermission()
+            synchronizeSubscription()
+            synchronizeToken()
+        }
     }
 
     override suspend fun optIn() {
         persistSubscription(PushSubscriptionState.OPTED_IN)
-        moduleContext.enqueue(EngageModuleOperation.PushSubscriptionChanged(optedIn = true))
+        synchronizeSubscription()
     }
 
     override suspend fun optOut() {
         persistSubscription(PushSubscriptionState.OPTED_OUT)
-        moduleContext.enqueue(EngageModuleOperation.PushSubscriptionChanged(optedIn = false))
+        synchronizeSubscription()
+    }
+
+    fun wipe() {
+        currentToken = null
+        check(preferences.edit().clear().commit()) { "Could not wipe Engage push state" }
+        mutableStatus.value = mutableStatus.value.copy(
+            subscription = PushSubscriptionState.OPTED_IN,
+            tokenRegistered = false,
+        )
     }
 
     fun onNewToken(token: String) {
@@ -145,7 +167,7 @@ internal class DefaultPush(
             )
         }
         if (!appInForeground || moduleContext.config.push.foregroundPresentation == ForegroundPresentation.SHOW) {
-            showNotification(message, payload)
+            showNotification(payload)
         }
     }
 
@@ -153,6 +175,34 @@ internal class DefaultPush(
         val payload = EngagePushPayload.from(intent.stringExtras()) ?: return
         if (!canRun()) return
         mutableEvents.tryEmit(PushEvent.Dismissed(payload.deliveryId, payload.messageId))
+    }
+
+    fun onAction(intent: Intent) {
+        val payload = EngagePushPayload.from(intent.stringExtras()) ?: return
+        val actionKey = intent.getStringExtra(EXTRA_ACTION_KEY)?.takeIf(String::isNotBlank) ?: return
+        if (!canRun()) return
+        NotificationManagerCompat.from(application).cancel(payload.notificationTag, payload.deliveryId.hashCode())
+        mutableEvents.tryEmit(
+            PushEvent.ActionSelected(payload.deliveryId, payload.messageId, actionKey, payload.customData()),
+        )
+        moduleContext.scope.launch {
+            moduleContext.enqueue(
+                EngageModuleOperation.PushReceipt(
+                    payload.deliveryId,
+                    io.engage.sdk.spi.PushReceiptType.OPENED,
+                ),
+            )
+            moduleContext.executeAction(
+                actionKey,
+                JsonObject(payload.customData().mapValues { JsonPrimitive(it.value) }),
+            )
+            if (intent.getBooleanExtra(EXTRA_ACTION_OPENS_APP, false)) {
+                application.packageManager.getLaunchIntentForPackage(application.packageName)?.let { launcher ->
+                    payload.data.forEach { (key, value) -> launcher.putExtra(key, value) }
+                    application.startActivity(launcher.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+            }
+        }
     }
 
     private fun handleOpenIntent(intent: Intent) {
@@ -191,9 +241,10 @@ internal class DefaultPush(
         if (moduleContext.privacy.value != PrivacyState.OPTED_IN) return
         if (SdkFeature.PUSH !in moduleContext.enabledFeatures.value) {
             if (preferences.getString(REGISTERED_TOKEN_HASH, null) != DISABLED_MARKER) {
-                moduleContext.enqueue(EngageModuleOperation.PushTokenChanged(null))
-                persistRegisteredTokenHash(DISABLED_MARKER)
-                mutableStatus.value = mutableStatus.value.copy(tokenRegistered = false)
+                if (moduleContext.enqueue(EngageModuleOperation.PushTokenChanged(null))) {
+                    persistRegisteredTokenHash(DISABLED_MARKER)
+                    mutableStatus.value = mutableStatus.value.copy(tokenRegistered = false)
+                }
             }
             return
         }
@@ -210,12 +261,37 @@ internal class DefaultPush(
         if (!canRun()) return
         val hash = token.sha256()
         if (preferences.getString(REGISTERED_TOKEN_HASH, null) == hash) return
-        moduleContext.enqueue(EngageModuleOperation.PushTokenChanged(token))
-        persistRegisteredTokenHash(hash)
+        if (moduleContext.enqueue(EngageModuleOperation.PushTokenChanged(token))) {
+            persistRegisteredTokenHash(hash)
+        }
     }
 
-    private fun refreshPermission() {
-        mutableStatus.value = mutableStatus.value.copy(permission = permissionProvider.current(application))
+    private suspend fun synchronizePermission() = permissionMutex.withLock {
+        val permission = permissionProvider.current(application)
+        mutableStatus.value = mutableStatus.value.copy(permission = permission)
+        if (moduleContext.privacy.value != PrivacyState.OPTED_IN) return
+        if (preferences.getString(REPORTED_PERMISSION, null) == permission.name) return
+        if (moduleContext.enqueue(EngageModuleOperation.PushPermissionChanged(permission.name))) {
+            check(preferences.edit().putString(REPORTED_PERMISSION, permission.name).commit()) {
+                "Could not persist Engage push permission state"
+            }
+        }
+    }
+
+    private suspend fun synchronizeSubscription(force: Boolean = false) = subscriptionMutex.withLock {
+        if (moduleContext.privacy.value != PrivacyState.OPTED_IN) return
+        if (!force && !preferences.getBoolean(PENDING_SUBSCRIPTION, false)) return
+        val subscription = storedSubscription()
+        val accepted = moduleContext.enqueue(
+            EngageModuleOperation.PushSubscriptionChanged(
+                optedIn = subscription == PushSubscriptionState.OPTED_IN,
+            ),
+        )
+        if (accepted) {
+            check(preferences.edit().putBoolean(PENDING_SUBSCRIPTION, false).commit()) {
+                "Could not persist Engage push subscription acknowledgement"
+            }
+        }
     }
 
     private fun canRun(): Boolean =
@@ -223,7 +299,12 @@ internal class DefaultPush(
             SdkFeature.PUSH in moduleContext.enabledFeatures.value
 
     private fun persistSubscription(subscription: PushSubscriptionState) {
-        check(preferences.edit().putString(SUBSCRIPTION, subscription.name).commit()) {
+        check(
+            preferences.edit()
+                .putString(SUBSCRIPTION, subscription.name)
+                .putBoolean(PENDING_SUBSCRIPTION, true)
+                .commit(),
+        ) {
             "Could not persist Engage push subscription"
         }
         mutableStatus.value = mutableStatus.value.copy(subscription = subscription)
@@ -239,9 +320,10 @@ internal class DefaultPush(
         ?.let { runCatching { PushSubscriptionState.valueOf(it) }.getOrNull() }
         ?: PushSubscriptionState.OPTED_IN
 
-    private fun showNotification(message: RemoteMessage, payload: EngagePushPayload) {
+    private fun showNotification(payload: EngagePushPayload) {
         val config = moduleContext.config.push.android ?: return
-        val notification = message.notification ?: return
+        val title = payload.title ?: return
+        val body = payload.body ?: return
         val launcher = application.packageManager.getLaunchIntentForPackage(application.packageName) ?: return
         for ((key, value) in payload.data) launcher.putExtra(key, value)
         val contentIntent = PendingIntent.getActivity(
@@ -259,41 +341,65 @@ internal class DefaultPush(
             dismissIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val channel = message.notification?.channelId?.takeIf { remote ->
+        val channel = payload.channelKey?.takeIf { remote ->
             config.channels.any { it.key == remote }
         } ?: config.defaultChannelKey
         val builder = NotificationCompat.Builder(application, channel)
             .setSmallIcon(config.smallIcon)
-            .setContentTitle(notification.title)
-            .setContentText(notification.body)
+            .setContentTitle(title)
+            .setContentText(body)
             .setAutoCancel(true)
             .setContentIntent(contentIntent)
             .setDeleteIntent(deleteIntent)
+        addCategoryActions(builder, payload)
         config.accentColor?.let { builder.setColor(ContextCompat.getColor(application, it)) }
         if (permissionProvider.current(application) == PushPermission.AUTHORIZED) {
-            notifySafely(payload.deliveryId.hashCode(), builder)
+            notifySafely(payload.notificationTag, payload.deliveryId.hashCode(), builder)
+        }
+    }
+
+    private fun addCategoryActions(builder: NotificationCompat.Builder, payload: EngagePushPayload) {
+        val config = moduleContext.config.push.android ?: return
+        val category = config.categories.firstOrNull { it.key == payload.categoryKey } ?: return
+        category.actions.forEach { action ->
+            val intent = Intent(application, EngagePushActionReceiver::class.java).apply {
+                payload.data.forEach { (key, value) -> putExtra(key, value) }
+                putExtra(EXTRA_ACTION_KEY, action.key)
+                putExtra(EXTRA_ACTION_OPENS_APP, action.opensApp)
+            }
+            val pendingIntent = PendingIntent.getBroadcast(
+                application,
+                "${payload.deliveryId}\u0000${action.key}".hashCode(),
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.addAction(0, application.getString(action.title), pendingIntent)
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun notifySafely(id: Int, builder: NotificationCompat.Builder) {
+    private fun notifySafely(tag: String?, id: Int, builder: NotificationCompat.Builder) {
         val runtimeGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(application, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
         if (!runtimeGranted) return
         try {
-            NotificationManagerCompat.from(application).notify(id, builder.build())
+            NotificationManagerCompat.from(application).notify(tag, id, builder.build())
         } catch (_: SecurityException) {
-            refreshPermission()
+            moduleContext.scope.launch { synchronizePermission() }
         }
     }
 
     private companion object {
         const val PREFERENCES = "engage_push"
         const val SUBSCRIPTION = "subscription"
+        const val PENDING_SUBSCRIPTION = "pending_subscription"
         const val REGISTERED_TOKEN_HASH = "registered_token_hash"
+        const val REPORTED_PERMISSION = "reported_permission"
         const val DISABLED_MARKER = "disabled"
         const val EXTRA_HANDLED = "engage_push_handled"
+        const val EXTRA_ACTION_KEY = "engage_push_action_key"
+        const val EXTRA_ACTION_OPENS_APP = "engage_push_action_opens_app"
     }
 }
 
@@ -317,14 +423,15 @@ internal fun interface PushPermissionProvider {
 
 private object AndroidPushPermissionProvider : PushPermissionProvider {
     override fun current(context: Context): PushPermission {
-        val runtimeGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return PushPermission.DENIED
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return PushPermission.AUTHORIZED
+        if (
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
-        return if (runtimeGranted && NotificationManagerCompat.from(context).areNotificationsEnabled()) {
-            PushPermission.AUTHORIZED
-        } else {
-            PushPermission.DENIED
-        }
+        ) return PushPermission.AUTHORIZED
+        // Android does not expose a public, reliable distinction between "never asked" and
+        // "denied" to a library that intentionally does not own the permission prompt.
+        return PushPermission.DENIED
     }
 }
 
@@ -355,6 +462,15 @@ private object AndroidChannelRegistrar {
         }
         require(config.channels.any { it.key == config.defaultChannelKey }) {
             "Android push defaultChannelKey must reference a configured channel"
+        }
+        require(config.categories.map { it.key }.distinct().size == config.categories.size) {
+            "Android push category keys must be unique"
+        }
+        require(config.categories.all { category ->
+            category.actions.isNotEmpty() &&
+                category.actions.map { it.key }.distinct().size == category.actions.size
+        }) {
+            "Android push categories must contain uniquely keyed actions"
         }
     }
 
@@ -390,3 +506,6 @@ private fun Intent.stringExtras(): Map<String, String> = extras?.keySet().orEmpt
 private fun String.sha256(): String = MessageDigest.getInstance("SHA-256")
     .digest(toByteArray())
     .joinToString("") { byte -> "%02x".format(byte) }
+
+private fun EngagePushPayload.customData(): Map<String, String> =
+    data.filterKeys { !it.startsWith("engage_") }
