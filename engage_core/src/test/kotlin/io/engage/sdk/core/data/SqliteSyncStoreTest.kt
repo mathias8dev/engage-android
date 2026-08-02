@@ -29,7 +29,7 @@ class SqliteSyncStoreTest {
         store.apply(setOf(SdkModule.FEATURE_FLAGS), response(generation = 2, key = "old"))
         store.apply(setOf(SdkModule.FEATURE_FLAGS), response(generation = 3, key = "new"))
 
-        assertEquals(3, store.snapshot.value.generation)
+        assertEquals(3L, store.snapshot.value.generation)
         assertEquals(listOf("new"), store.snapshot.value.documents.map(SyncDocument::key))
     }
 
@@ -51,4 +51,3 @@ class SqliteSyncStoreTest {
         refreshAfterSeconds = 900,
     )
 }
-
