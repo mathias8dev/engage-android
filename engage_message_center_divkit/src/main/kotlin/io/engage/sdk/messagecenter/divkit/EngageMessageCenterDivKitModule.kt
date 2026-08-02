@@ -8,9 +8,14 @@ import android.net.Uri
 import io.engage.sdk.Engage
 import io.engage.sdk.MessageCenter
 import io.engage.sdk.MessageCenterRenderingSupport
+import io.engage.sdk.messageCenter
+import io.engage.sdk.messagecenter.divkit.data.RenderingRepository
+import io.engage.sdk.messagecenter.divkit.data.RenderingStore
 import io.engage.sdk.messagecenter.divkit.render.EngageMessageCenterActivity
 import io.engage.sdk.spi.EngageModule
 import io.engage.sdk.spi.EngageModuleContext
+import io.engage.sdk.spi.EngageSignal
+import kotlinx.coroutines.launch
 
 internal object EngageMessageCenterDivKitModule : EngageModule {
     override val id: String = "engage-message-center-divkit"
@@ -30,6 +35,23 @@ internal object EngageMessageCenterDivKitModule : EngageModule {
 }
 
 internal class MessageCenterUiRuntime(private val context: EngageModuleContext) {
+    val repository = RenderingRepository(
+        RenderingStore(context.applicationContext),
+        context.generation,
+        support = { renderingSupport() },
+    )
+
+    init {
+        context.scope.launch {
+            context.generation.collect(repository::activateGeneration)
+        }
+        context.scope.launch {
+            context.signals.collect { signal ->
+                if (signal == EngageSignal.LocalDataWiped) repository.clear()
+            }
+        }
+    }
+
     fun display(messageCenter: MessageCenter) {
         check(messageCenter is MessageCenterRenderingSupport) {
             "engage-message-center-divkit requires the official engage-message-center artifact"
@@ -39,6 +61,10 @@ internal class MessageCenterUiRuntime(private val context: EngageModuleContext) 
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
     }
+
+    fun renderingSupport(): MessageCenterRenderingSupport =
+        Engage.messageCenter as? MessageCenterRenderingSupport
+            ?: error("engage-message-center-divkit requires the official engage-message-center artifact")
 }
 
 public class EngageMessageCenterDivKitInitProvider : ContentProvider() {
