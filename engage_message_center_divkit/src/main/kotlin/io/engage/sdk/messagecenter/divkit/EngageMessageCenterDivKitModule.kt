@@ -29,6 +29,10 @@ internal object EngageMessageCenterDivKitModule : EngageModule {
         if (runtime == null) runtime = MessageCenterUiRuntime(context)
     }
 
+    override suspend fun wipe() {
+        runtime?.repository?.clear()
+    }
+
     fun requireRuntime(): MessageCenterUiRuntime = checkNotNull(runtime) {
         "Engage.start(context, config) must complete before displaying the Message Center"
     }
