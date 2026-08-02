@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="engage_message_center_title">Messages</string>
+    <string name="engage_message_center_back">Back</string>
+    <string name="engage_message_center_mark_all_read">Mark all read</string>
+    <string name="engage_message_center_empty">No messages yet</string>
+    <string name="engage_message_center_retry">Couldn\'t refresh messages. Pull to retry.</string>
+    <string name="engage_message_center_rendering_retry">Some messages couldn\'t be displayed. Pull to retry.</string>
+    <string name="engage_message_center_unavailable">This message cannot be displayed.</string>
+</resources>

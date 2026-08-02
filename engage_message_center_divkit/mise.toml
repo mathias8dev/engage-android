@@ -1,0 +1,6 @@
+[tools]
+java = "temurin-21"
+
+[env]
+ANDROID_HOME = "/home/mathias8dev/Android/Sdk"
+ANDROID_SDK_ROOT = "/home/mathias8dev/Android/Sdk"

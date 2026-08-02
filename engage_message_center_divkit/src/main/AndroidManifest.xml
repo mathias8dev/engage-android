@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <provider
+            android:name="io.engage.sdk.messagecenter.divkit.EngageMessageCenterDivKitInitProvider"
+            android:authorities="${applicationId}.engage-message-center-divkit-init"
+            android:exported="false"
+            android:initOrder="85" />
+
+        <activity
+            android:name="io.engage.sdk.messagecenter.divkit.render.EngageMessageCenterActivity"
+            android:exported="false"
+            android:label="@string/engage_message_center_title" />
+    </application>
+</manifest>
