@@ -2,6 +2,7 @@ package io.engage.sdk.messagecenter.domain
 
 import kotlinx.serialization.json.JsonObject
 import java.time.Instant
+import kotlinx.coroutines.flow.StateFlow
 
 internal enum class InboxScope { INSTALLATION, PROFILE }
 internal enum class MutationType { MARK_READ, MARK_UNREAD, DELETE, MARK_ALL_READ }
@@ -53,3 +54,26 @@ internal data class InboxRendering(
     val document: JsonObject,
 )
 
+internal data class CachedInboxWindow(
+    val entryIds: List<String> = emptyList(),
+    val nextCursor: String? = null,
+    val hasMore: Boolean = false,
+)
+
+internal data class InboxStoreSnapshot(
+    val generation: Long = 0,
+    val entries: Map<String, RemoteInboxEntry> = emptyMap(),
+    val unreadCount: Int = 0,
+    val pendingCount: Int = 0,
+)
+
+internal interface InboxStore {
+    val snapshot: StateFlow<InboxStoreSnapshot>
+    suspend fun activateGeneration(generation: Long)
+    suspend fun savePage(generation: Long, pageSize: Int, cursor: String?, page: RemoteInboxPage)
+    suspend fun cachedWindow(generation: Long, pageSize: Int): CachedInboxWindow
+    suspend fun enqueue(mutation: PendingMutation)
+    suspend fun reserve(generation: Long, limit: Int = 100): ReservedMutationBatch?
+    suspend fun settle(batch: ReservedMutationBatch, results: List<MutationResult>): List<MutationResult>
+    suspend fun clear()
+}
