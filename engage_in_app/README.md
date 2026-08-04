@@ -3,6 +3,11 @@
 `engage-in-app` is the optional Android in-app experience module for `engage-core`. Installing the
 artifact registers it automatically; `Engage.start(...)` remains the only initialization call.
 
+```kotlin
+repositories { maven("https://jitpack.io") }
+dependencies { implementation("com.github.mathias8dev:engage-android-in-app:2.1.0") }
+```
+
 The module evaluates synchronized campaigns locally, including schedules, app/screen/event/session
 triggers, deterministic locale and allocation variants, and durable frequency limits. It renders
 automatic banner, modal and fullscreen overlays one at a time, while embedded placements remain
