@@ -4,6 +4,13 @@ Optional ready-made Android UI for `engage-message-center`. Add this artifact on
 wants Engage to render the Inbox snapshots produced by its published DivKit templates.
 
 ```kotlin
+repositories { maven("https://jitpack.io") }
+dependencies {
+    implementation("com.github.mathias8dev:engage-android-message-center-divkit:2.1.0")
+}
+```
+
+```kotlin
 Engage.messageCenter.display()
 ```
 
