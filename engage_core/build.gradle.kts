@@ -1,12 +1,27 @@
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+
 plugins {
-    id("com.android.library") version "8.13.2"
+    id("com.android.library") version "8.11.1"
     id("org.jetbrains.kotlin.android") version "2.0.21"
     id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21"
     id("maven-publish")
 }
 
-group = "io.engage"
-version = providers.gradleProperty("engageVersion").getOrElse("0.1.0-SNAPSHOT")
+group = "com.github.mathias8dev"
+val engageReleaseVersion = providers.gradleProperty("engageReleaseVersion").get()
+val localBuildVersion = providers.provider {
+    val timestamp = DateTimeFormatter.ofPattern("yyMMddHHmm")
+        .withZone(ZoneOffset.UTC)
+        .format(Instant.now())
+    "$engageReleaseVersion-$timestamp"
+}
+val engageVersion = providers.gradleProperty("engageVersion")
+    .orElse(providers.environmentVariable("VERSION"))
+    .orElse(localBuildVersion)
+    .get()
+version = engageVersion
 
 android {
     namespace = "io.engage.sdk.core"
@@ -74,7 +89,7 @@ dependencies {
 publishing {
     publications {
         register<MavenPublication>("release") {
-            artifactId = "engage-core"
+            artifactId = "engage-android-core"
             afterEvaluate {
                 from(components["release"])
             }
