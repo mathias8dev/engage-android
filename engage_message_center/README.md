@@ -4,6 +4,11 @@ Headless, offline-first Inbox support for `engage-core`. The artifact contains n
 and never interprets the application-defined `InboxEntry.key` or `InboxEntry.payload`.
 
 ```kotlin
+repositories { maven("https://jitpack.io") }
+dependencies { implementation("com.github.mathias8dev:engage-android-message-center:2.1.0") }
+```
+
+```kotlin
 val pager = Engage.messageCenter.inbox.pager(pageSize = 20)
 
 pager.state.collect { state ->
