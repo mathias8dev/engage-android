@@ -5,11 +5,13 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
 import android.app.NotificationChannel
+import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.media.AudioAttributes
 import android.os.Build
 import android.os.Bundle
@@ -56,6 +58,8 @@ internal class DefaultPush(
     private val moduleContext: EngageModuleContext,
     private val tokenProvider: PushTokenProvider = FirebasePushTokenProvider,
     private val permissionProvider: PushPermissionProvider = AndroidPushPermissionProvider,
+    private val imageLoader: PushImageLoader = HttpPushImageLoader,
+    private val notificationObserver: (Notification) -> Unit = {},
 ) : Push {
     private val application = moduleContext.applicationContext as Application
     private val preferences = application.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
@@ -157,7 +161,7 @@ internal class DefaultPush(
     fun onMessage(message: RemoteMessage) {
         val payload = EngagePushPayload.from(message.data) ?: return
         if (!canRun()) return
-        mutableEvents.tryEmit(PushEvent.Received(payload.deliveryId, payload.messageId, payload.data))
+        mutableEvents.tryEmit(PushEvent.Received(payload.deliveryId, payload.messageId, payload.customData()))
         moduleContext.scope.launch {
             moduleContext.enqueue(
                 EngageModuleOperation.PushReceipt(
@@ -165,9 +169,10 @@ internal class DefaultPush(
                     io.engage.sdk.spi.PushReceiptType.DELIVERED,
                 ),
             )
-        }
-        if (!appInForeground || moduleContext.config.push.foregroundPresentation == ForegroundPresentation.SHOW) {
-            showNotification(payload)
+            if (!appInForeground || moduleContext.config.push.foregroundPresentation == ForegroundPresentation.SHOW) {
+                val image = payload.imageUrl?.let { url -> imageLoader.load(url) }
+                showNotification(payload, image)
+            }
         }
     }
 
@@ -194,7 +199,7 @@ internal class DefaultPush(
             )
             moduleContext.executeAction(
                 actionKey,
-                JsonObject(payload.customData().mapValues { JsonPrimitive(it.value) }),
+                JsonObject(payload.actionArguments.mapValues { JsonPrimitive(it.value) }),
             )
             if (intent.getBooleanExtra(EXTRA_ACTION_OPENS_APP, false)) {
                 application.packageManager.getLaunchIntentForPackage(application.packageName)?.let { launcher ->
@@ -205,7 +210,7 @@ internal class DefaultPush(
         }
     }
 
-    private fun handleOpenIntent(intent: Intent) {
+    internal fun handleOpenIntent(intent: Intent) {
         if (intent.getBooleanExtra(EXTRA_HANDLED, false)) return
         val payload = EngagePushPayload.from(intent.stringExtras()) ?: return
         intent.putExtra(EXTRA_HANDLED, true)
@@ -213,7 +218,7 @@ internal class DefaultPush(
         val deepLink = payload.actionValue.takeIf {
             payload.actionType == "DEEPLINK" || payload.actionType == "WEB_URL"
         }
-        mutableEvents.tryEmit(PushEvent.Opened(payload.deliveryId, payload.messageId, deepLink, payload.data))
+        mutableEvents.tryEmit(PushEvent.Opened(payload.deliveryId, payload.messageId, deepLink, payload.customData()))
         moduleContext.scope.launch {
             moduleContext.enqueue(
                 EngageModuleOperation.PushReceipt(
@@ -228,11 +233,9 @@ internal class DefaultPush(
                         JsonObject(payload.actionArguments.mapValues { JsonPrimitive(it.value) }),
                     )
                 }
-                "DEEPLINK", "WEB_URL" -> payload.actionValue?.let { value ->
-                    application.startActivity(
-                        Intent(Intent.ACTION_VIEW, value.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                    )
-                }
+                // Navigation belongs to the App. The SDK exposes the destination in PushEvent.Opened
+                // on both Android and iOS instead of opening it a second time on Android.
+                "DEEPLINK", "WEB_URL" -> Unit
             }
         }
     }
@@ -320,18 +323,19 @@ internal class DefaultPush(
         ?.let { runCatching { PushSubscriptionState.valueOf(it) }.getOrNull() }
         ?: PushSubscriptionState.OPTED_IN
 
-    private fun showNotification(payload: EngagePushPayload) {
+    private fun showNotification(payload: EngagePushPayload, image: Bitmap?) {
         val config = moduleContext.config.push.android ?: return
         val title = payload.title ?: return
         val body = payload.body ?: return
-        val launcher = application.packageManager.getLaunchIntentForPackage(application.packageName) ?: return
-        for ((key, value) in payload.data) launcher.putExtra(key, value)
-        val contentIntent = PendingIntent.getActivity(
-            application,
-            payload.deliveryId.hashCode(),
-            launcher.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val contentIntent = application.packageManager.getLaunchIntentForPackage(application.packageName)?.let { launcher ->
+            for ((key, value) in payload.data) launcher.putExtra(key, value)
+            PendingIntent.getActivity(
+                application,
+                payload.deliveryId.hashCode(),
+                launcher.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
         val dismissIntent = Intent(application, EngagePushDismissReceiver::class.java).apply {
             for ((key, value) in payload.data) putExtra(key, value)
         }
@@ -349,8 +353,13 @@ internal class DefaultPush(
             .setContentTitle(title)
             .setContentText(body)
             .setAutoCancel(true)
-            .setContentIntent(contentIntent)
             .setDeleteIntent(deleteIntent)
+        contentIntent?.let(builder::setContentIntent)
+        if (image != null) {
+            builder
+                .setLargeIcon(image)
+                .setStyle(NotificationCompat.BigPictureStyle().bigPicture(image).bigLargeIcon(null as Bitmap?))
+        }
         addCategoryActions(builder, payload)
         config.accentColor?.let { builder.setColor(ContextCompat.getColor(application, it)) }
         if (permissionProvider.current(application) == PushPermission.AUTHORIZED) {
@@ -384,7 +393,9 @@ internal class DefaultPush(
             PackageManager.PERMISSION_GRANTED
         if (!runtimeGranted) return
         try {
-            NotificationManagerCompat.from(application).notify(tag, id, builder.build())
+            val notification = builder.build()
+            notificationObserver(notification)
+            NotificationManagerCompat.from(application).notify(tag, id, notification)
         } catch (_: SecurityException) {
             moduleContext.scope.launch { synchronizePermission() }
         }

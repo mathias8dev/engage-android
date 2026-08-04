@@ -1,10 +1,21 @@
 package io.engage.sdk.push.fcm
 
+import android.app.Notification
+import android.app.NotificationManager
 import android.app.Application
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
 import androidx.test.core.app.ApplicationProvider
+import com.google.firebase.messaging.RemoteMessage
+import io.engage.sdk.AndroidPushAction
+import io.engage.sdk.AndroidPushCategory
+import io.engage.sdk.AndroidPushChannel
+import io.engage.sdk.AndroidPushConfig
 import io.engage.sdk.EngageConfig
 import io.engage.sdk.PrivacyState
+import io.engage.sdk.PushConfig
+import io.engage.sdk.PushEvent
 import io.engage.sdk.PushPermission
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.spi.EngageHttpRequest
@@ -16,21 +27,28 @@ import io.engage.sdk.spi.EngageSignal
 import io.engage.sdk.spi.EngageSyncModule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -93,11 +111,129 @@ class DefaultPushTest {
         application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
+    @Test
+    @Config(sdk = [32])
+    fun `received events expose only custom data and rich images use big picture style`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        clearState(application)
+        val context = FakeModuleContext(application, backgroundScope, pushConfig())
+        val image = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
+        var notification: Notification? = null
+        val push = DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+            imageLoader = PushImageLoader { image },
+            notificationObserver = { notification = it },
+        )
+        val event = async { push.events.first() }
+        runCurrent()
+
+        push.onMessage(RemoteMessage.Builder("engage").setData(pushPayload()).build())
+        runCurrent()
+
+        assertEquals(
+            PushEvent.Received("delivery-1", "message-1", mapOf("merchant" to "Paris")),
+            event.await(),
+        )
+        assertNotNull(notification?.extras?.getParcelable<Bitmap>(Notification.EXTRA_PICTURE))
+        clearState(application)
+    }
+
+    @Test
+    fun `notification category actions receive action arguments instead of custom data`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        clearState(application)
+        val context = FakeModuleContext(application, backgroundScope, pushConfig())
+        val push = DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+        )
+        runCurrent()
+        val intent = Intent().apply {
+            pushPayload().forEach(::putExtra)
+            putExtra("engage_push_action_key", "open_order")
+        }
+
+        push.onAction(intent)
+        runCurrent()
+
+        assertEquals("open_order", context.executedAction)
+        assertEquals(JsonObject(mapOf("order_id" to JsonPrimitive("order-42"))), context.executedArguments)
+        clearState(application)
+    }
+
+    @Test
+    fun `opening a deep link emits filtered data without navigating on behalf of the app`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        clearState(application)
+        val context = FakeModuleContext(application, backgroundScope, pushConfig())
+        val push = DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+        )
+        val event = async { push.events.first() }
+        runCurrent()
+        val intent = Intent().apply { pushPayload(actionType = "DEEPLINK").forEach(::putExtra) }
+
+        push.handleOpenIntent(intent)
+        runCurrent()
+
+        assertEquals(
+            PushEvent.Opened(
+                "delivery-1",
+                "message-1",
+                "engage-test://orders/42",
+                mapOf("merchant" to "Paris"),
+            ),
+            event.await(),
+        )
+        assertNull(shadowOf(application).nextStartedActivity)
+        clearState(application)
+    }
+
+    private fun pushConfig() = EngageConfig(
+        appKey = "eng_app_test",
+        push = PushConfig(
+            android = AndroidPushConfig(
+                smallIcon = android.R.drawable.ic_dialog_info,
+                defaultChannelKey = "general",
+                channels = listOf(AndroidPushChannel("general", android.R.string.untitled)),
+                categories = listOf(
+                    AndroidPushCategory(
+                        "orders",
+                        listOf(AndroidPushAction("open_order", android.R.string.ok)),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    private fun pushPayload(actionType: String = "CUSTOM") = mapOf(
+        "engage_delivery_id" to "delivery-1",
+        "engage_message_id" to "message-1",
+        "engage_action_type" to actionType,
+        "engage_action_value" to if (actionType == "CUSTOM") "open_order" else "engage-test://orders/42",
+        "engage_action_arg_order_id" to "order-42",
+        "engage_title" to "Order ready",
+        "engage_body" to "Order 42 is ready",
+        "engage_image_url" to "https://cdn.example.test/order.png",
+        "engage_category_key" to "orders",
+        "merchant" to "Paris",
+    )
+
+    private fun clearState(application: Application) {
+        application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
+        application.getSystemService(NotificationManager::class.java).cancelAll()
+    }
+
     private class FakeModuleContext(
         override val applicationContext: Application,
         override val scope: CoroutineScope,
+        override val config: EngageConfig = EngageConfig("eng_app_test"),
     ) : EngageModuleContext {
-        override val config = EngageConfig("eng_app_test")
         override val installationId = MutableStateFlow<String?>("installation-1")
         override val generation = MutableStateFlow(1L)
         override val privacy = MutableStateFlow(PrivacyState.OPTED_IN)
@@ -107,6 +243,8 @@ class DefaultPushTest {
         val pushDocuments = MutableStateFlow<List<EngageRemoteDocument>>(emptyList())
         val operations = mutableListOf<EngageModuleOperation>()
         var acceptOperations = true
+        var executedAction: String? = null
+        var executedArguments: JsonObject? = null
 
         override fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>> = pushDocuments
         override suspend fun enqueue(operation: EngageModuleOperation): Boolean {
@@ -114,7 +252,11 @@ class DefaultPushTest {
             return acceptOperations
         }
         override suspend fun refresh() = Unit
-        override suspend fun executeAction(name: String, arguments: JsonObject): Boolean = true
+        override suspend fun executeAction(name: String, arguments: JsonObject): Boolean {
+            executedAction = name
+            executedArguments = arguments
+            return true
+        }
         override suspend fun authorizedRequest(request: EngageHttpRequest): EngageHttpResponse =
             error("Not used")
     }

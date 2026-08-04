@@ -2,6 +2,9 @@ pluginManagement {
     repositories {
         google()
         mavenCentral()
+        maven("https://jitpack.io") {
+            content { includeGroup("com.github.mathias8dev") }
+        }
         gradlePluginPortal()
     }
 }
@@ -16,11 +19,16 @@ dependencyResolutionManagement {
 
 rootProject.name = "engage-push-fcm"
 
-if (file("../engage_core/settings.gradle.kts").isFile) {
-    includeBuild("../engage_core") {
+val localCoreDirectory = file("../engage_core").canonicalFile
+val parentBuildDirectory = gradle.parent?.startParameter?.currentDir?.canonicalFile
+val parentUsesSiblingSources = parentBuildDirectory?.parentFile == localCoreDirectory.parentFile
+
+if ((gradle.parent == null || parentUsesSiblingSources) &&
+    file("$localCoreDirectory/settings.gradle.kts").isFile
+) {
+    includeBuild(localCoreDirectory) {
         dependencySubstitution {
-            substitute(module("io.engage:engage-core")).using(project(":"))
+            substitute(module("com.github.mathias8dev:engage-android-core")).using(project(":"))
         }
     }
 }
-
