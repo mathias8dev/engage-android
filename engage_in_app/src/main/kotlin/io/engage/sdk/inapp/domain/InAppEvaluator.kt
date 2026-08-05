@@ -1,6 +1,7 @@
 package io.engage.sdk.inapp.domain
 
 import io.engage.sdk.OverlayPresentation
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.spi.EngageSignal
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -68,6 +69,7 @@ internal class InAppEvaluator(
 
     fun replaceCampaigns(value: List<Campaign>) {
         campaigns = value
+        EngageLogger.debug("InAppEvaluator", "campaigns replaced count=${value.size}")
         val keys = value.mapTo(mutableSetOf()) { it.key }
         eligibleAt.keys.retainAll(keys)
         value.filter { it.triggers.isEmpty() }.forEach { campaign ->
@@ -87,6 +89,7 @@ internal class InAppEvaluator(
     }
 
     fun resetContext() {
+        EngageLogger.debug("InAppEvaluator", "context reset campaigns=${campaigns.size} eligible=${eligibleAt.size}")
         campaigns = emptyList()
         eligibleAt.clear()
         currentScreen = null
@@ -94,11 +97,16 @@ internal class InAppEvaluator(
     }
 
     fun onSignal(signal: EngageSignal) {
+        EngageLogger.verbose("InAppEvaluator", "signal=${signal::class.simpleName}")
         val now = clock.instant()
         when (signal) {
             EngageSignal.AppOpened -> {
                 isForeground = true
                 history.beginSession()
+                EngageLogger.info(
+                    "InAppEvaluator",
+                    "session started id=${history.sessionId} count=${history.sessionCount}",
+                )
                 campaigns.forEach { campaign ->
                     campaign.triggers.filter { trigger ->
                         trigger.type == TriggerType.APP_OPEN ||
@@ -141,7 +149,13 @@ internal class InAppEvaluator(
             compareByDescending<ResolvedContent> { it.campaign.priority }
                 .thenBy { it.campaign.publishedAt }
                 .thenBy { it.campaign.key },
-        )
+        ).also { resolved ->
+            EngageLogger.debug(
+                "InAppEvaluator",
+                "candidates evaluated campaigns=${campaigns.size} eligible=${eligibleAt.size} " +
+                    "resolved=${resolved.map { it.campaign.messageId }}",
+            )
+        }
     }
 
     fun nextEvaluationDelayMillis(): Long? {
@@ -168,15 +182,18 @@ internal class InAppEvaluator(
 
     fun consume(candidate: ResolvedContent) {
         eligibleAt.remove(candidate.campaign.key)
+        EngageLogger.debug("InAppEvaluator", "candidate consumed messageId=${candidate.campaign.messageId}")
     }
 
     fun recordImpression(candidate: ResolvedContent) {
         history.recordImpression(candidate.campaign.key, clock.instant())
+        EngageLogger.info("InAppEvaluator", "impression recorded messageId=${candidate.campaign.messageId}")
         if (candidate.variant.presentation is OverlayPresentation || candidate.campaign.oneShot) consume(candidate)
     }
 
     fun recordDismiss(candidate: ResolvedContent) {
         history.recordDismiss(candidate.campaign.key, clock.instant())
+        EngageLogger.info("InAppEvaluator", "dismiss recorded messageId=${candidate.campaign.messageId}")
         if (!candidate.campaign.displayPolicy.redisplayAfterDismissal) consume(candidate)
     }
 
@@ -190,10 +207,18 @@ internal class InAppEvaluator(
 
     private fun markEligible(campaign: Campaign, trigger: Trigger, now: Instant) {
         eligibleAt[campaign.key] = now.plusSeconds(trigger.delaySeconds.toLong())
+        EngageLogger.debug(
+            "InAppEvaluator",
+            "campaign eligible messageId=${campaign.messageId} trigger=${trigger.type} delaySeconds=${trigger.delaySeconds}",
+        )
     }
 
     private fun markEligibleIfAbsent(campaign: Campaign, trigger: Trigger, now: Instant) {
-        eligibleAt.putIfAbsent(campaign.key, now.plusSeconds(trigger.delaySeconds.toLong()))
+        val previous = eligibleAt.putIfAbsent(campaign.key, now.plusSeconds(trigger.delaySeconds.toLong()))
+        EngageLogger.verbose(
+            "InAppEvaluator",
+            "campaign eligibility checked messageId=${campaign.messageId} trigger=${trigger.type} alreadyEligible=${previous != null}",
+        )
     }
 
     private fun isScheduled(campaign: Campaign, now: Instant): Boolean =
@@ -205,18 +230,33 @@ internal class InAppEvaluator(
     private fun withinLimits(campaign: Campaign, now: Instant): Boolean {
         val record = history.history(campaign.key)
         val policy = campaign.displayPolicy
-        if (policy.maxTotalImpressions?.let { record.total >= it } == true) return false
+        if (policy.maxTotalImpressions?.let { record.total >= it } == true) {
+            EngageLogger.verbose("InAppEvaluator", "limited messageId=${campaign.messageId} reason=max_total")
+            return false
+        }
         if (policy.maxImpressionsPerSession?.let {
                 record.sessionId == history.sessionId && record.sessionCount >= it
             } == true
-        ) return false
+        ) {
+            EngageLogger.verbose("InAppEvaluator", "limited messageId=${campaign.messageId} reason=max_session")
+            return false
+        }
         val today = LocalDate.ofInstant(now, java.time.ZoneOffset.UTC).toString()
-        if (policy.maxImpressionsPerDay?.let { record.day == today && record.dayCount >= it } == true) return false
+        if (policy.maxImpressionsPerDay?.let { record.day == today && record.dayCount >= it } == true) {
+            EngageLogger.verbose("InAppEvaluator", "limited messageId=${campaign.messageId} reason=max_day")
+            return false
+        }
         if (policy.cooldownMinutes?.let { minutes ->
                 record.lastImpressionAt?.let { Duration.between(it, now) < Duration.ofMinutes(minutes.toLong()) }
             } == true
-        ) return false
-        if (!policy.redisplayAfterDismissal && record.lastDismissedAt != null) return false
+        ) {
+            EngageLogger.verbose("InAppEvaluator", "limited messageId=${campaign.messageId} reason=cooldown")
+            return false
+        }
+        if (!policy.redisplayAfterDismissal && record.lastDismissedAt != null) {
+            EngageLogger.verbose("InAppEvaluator", "limited messageId=${campaign.messageId} reason=dismissed")
+            return false
+        }
         return true
     }
 
@@ -228,7 +268,14 @@ internal class InAppEvaluator(
         var upperBound = 0
         variants.forEach { variant ->
             upperBound += variant.allocationPercentage
-            if (bucket < upperBound) return variant
+            if (bucket < upperBound) {
+                EngageLogger.debug(
+                    "InAppEvaluator",
+                    "variant selected messageId=${campaign.messageId} variant=${variant.id ?: variant.key} " +
+                        "locale=$selectedLocale bucket=$bucket",
+                )
+                return variant
+            }
         }
         return null
     }

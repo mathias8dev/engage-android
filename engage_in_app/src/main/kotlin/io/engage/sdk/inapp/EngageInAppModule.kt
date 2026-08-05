@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.net.Uri
 import io.engage.sdk.Engage
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.InApp
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.spi.EngageModule
@@ -19,10 +20,16 @@ internal object EngageInAppModule : EngageModule {
     private var api: InApp? = null
 
     override fun start(context: EngageModuleContext) {
-        if (api == null) api = DefaultInApp(context)
+        if (api == null) {
+            context.logInfo("InApp", "module starting")
+            api = DefaultInApp(context)
+        } else {
+            context.logVerbose("InApp", "module start ignored reason=already_started")
+        }
     }
 
     override suspend fun wipe() {
+        EngageLogger.warn("InApp", "module wipe requested")
         (api as? DefaultInApp)?.wipe()
     }
 
@@ -35,6 +42,7 @@ internal object EngageInAppModule : EngageModule {
 
 public class EngageInAppInitProvider : ContentProvider() {
     override fun onCreate(): Boolean {
+        EngageLogger.debug("InApp", "initialization provider registering module")
         Engage.registerModule(EngageInAppModule)
         return true
     }

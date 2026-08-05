@@ -26,6 +26,7 @@ import com.yandex.div.json.ParsingErrorLogger
 import com.yandex.div2.DivData
 import io.engage.sdk.InAppContent
 import io.engage.sdk.InAppContentType
+import io.engage.sdk.EngageLogger
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -46,6 +47,10 @@ internal class EngageContentView(
     }
 
     init {
+        EngageLogger.debug(
+            "InApp.Render",
+            "content view creating messageId=${content.messageId} variant=${content.variantId} type=${content.type}",
+        )
         clipChildren = false
         clipToPadding = false
         runCatching { createContentView() }
@@ -54,20 +59,29 @@ internal class EngageContentView(
                     io.engage.sdk.OverlayFormat.FULLSCREEN
                 ) LayoutParams.MATCH_PARENT else LayoutParams.WRAP_CONTENT
                 addView(it, LayoutParams(LayoutParams.MATCH_PARENT, height))
+                EngageLogger.debug(
+                    "InApp.Render",
+                    "content view created messageId=${content.messageId} child=${it.javaClass.simpleName}",
+                )
                 if (content.type == InAppContentType.SCENE || content.type == InAppContentType.SURVEY) {
                     markContentReady()
                 }
             }
-            .onFailure { callbacks.onRenderFailed(content) }
+            .onFailure { error ->
+                EngageLogger.error("InApp.Render", "content view creation failed messageId=${content.messageId}", error)
+                callbacks.onRenderFailed(content)
+            }
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        EngageLogger.verbose("InApp.Render", "content attached messageId=${content.messageId}")
         viewTreeObserver.addOnPreDrawListener(preDrawListener)
         reportVisibilityIfNeeded()
     }
 
     override fun onDetachedFromWindow() {
+        EngageLogger.verbose("InApp.Render", "content detached messageId=${content.messageId}")
         if (viewTreeObserver.isAlive) viewTreeObserver.removeOnPreDrawListener(preDrawListener)
         (getChildAt(0) as? Div2View)?.cleanup()
         (getChildAt(0) as? WebView)?.destroy()
@@ -83,6 +97,7 @@ internal class EngageContentView(
     }
 
     private fun createDivView(): View {
+        EngageLogger.debug("InApp.Render", "DivKit scene parsing messageId=${content.messageId}")
         val json = JSONObject(content.payload.toString())
         val environment = DivParsingEnvironment(ParsingErrorLogger.LOG)
         json.optJSONObject("templates")?.let(environment::parseTemplates)
@@ -99,11 +114,13 @@ internal class EngageContentView(
         )
         return Div2View(divContext, null, 0).apply {
             check(setData(data, DivDataTag(content.messageId))) { "DivKit rejected the scene" }
+            EngageLogger.debug("InApp.Render", "DivKit scene bound messageId=${content.messageId}")
         }
     }
 
     private fun createImageView(): View {
         val url = content.payload.string("url") ?: error("Image content requires a url")
+        EngageLogger.debug("InApp.Render", "image loading messageId=${content.messageId} host=${Uri.parse(url).host}")
         return ImageView(context).apply {
             adjustViewBounds = true
             scaleType = when (content.payload.string("contentMode")) {
@@ -114,8 +131,18 @@ internal class EngageContentView(
             setOnClickListener { callbacks.onClicked(content) }
             load(url) {
                 listener(
-                    onSuccess = { _, _ -> markContentReady() },
-                    onError = { _, _ -> callbacks.onRenderFailed(content) },
+                    onSuccess = { _, _ ->
+                        EngageLogger.debug("InApp.Render", "image loaded messageId=${content.messageId}")
+                        markContentReady()
+                    },
+                    onError = { _, result ->
+                        EngageLogger.error(
+                            "InApp.Render",
+                            "image load failed messageId=${content.messageId}",
+                            result.throwable,
+                        )
+                        callbacks.onRenderFailed(content)
+                    },
                 )
             }
         }
@@ -126,17 +153,27 @@ internal class EngageContentView(
         val url = content.payload.string("url")
         val html = content.payload.string("html")
         require(url != null || html != null) { "Web content requires url or html" }
+        EngageLogger.debug(
+            "InApp.Render",
+            "web content loading messageId=${content.messageId} source=${if (url != null) "url" else "html"} " +
+                "host=${url?.let { Uri.parse(it).host }}",
+        )
         return WebView(context).apply {
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.javaScriptEnabled = content.payload.boolean("javaScriptEnabled") == true
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String?) {
+                    EngageLogger.debug("InApp.Render", "web content loaded messageId=${content.messageId}")
                     markContentReady()
                 }
 
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                     if (request.isForMainFrame) {
+                        EngageLogger.warn(
+                            "InApp.Render",
+                            "web content load failed messageId=${content.messageId} code=${error.errorCode}",
+                        )
                         visibilityGate.markFailed()
                         callbacks.onRenderFailed(content)
                     }
@@ -160,6 +197,10 @@ internal class EngageContentView(
     }
 
     private fun handleWebUri(uri: Uri): Boolean {
+        EngageLogger.debug(
+            "InApp.Render",
+            "web navigation messageId=${content.messageId} scheme=${uri.scheme} host=${uri.host}",
+        )
         if (uri.scheme == "engage") {
             EngageDivActionHandler(content, callbacks).handleEngageUri(uri)
             return true
@@ -175,11 +216,13 @@ internal class EngageContentView(
         val visibleArea = visible.width().toLong() * visible.height().toLong()
         val totalArea = width.toLong() * height.toLong()
         if (visibilityGate.shouldReport(totalArea > 0 && visibleArea * 2 >= totalArea)) {
+            EngageLogger.info("InApp.Render", "content visible messageId=${content.messageId}")
             callbacks.onVisible(content)
         }
     }
 
     private fun markContentReady() {
+        EngageLogger.verbose("InApp.Render", "content ready messageId=${content.messageId}")
         visibilityGate.markReady()
         reportVisibilityIfNeeded()
     }
@@ -213,6 +256,10 @@ private class EngageDivActionHandler(
 ) : DivActionHandler() {
     override fun handleActionUrl(actionUrl: Uri?, view: DivViewFacade): Boolean {
         actionUrl ?: return false
+        EngageLogger.debug(
+            "InApp.Render",
+            "DivKit action messageId=${content.messageId} scheme=${actionUrl.scheme} host=${actionUrl.host}",
+        )
         return if (actionUrl.scheme == "engage") {
             handleEngageUri(actionUrl)
             true
@@ -223,6 +270,7 @@ private class EngageDivActionHandler(
     }
 
     fun handleEngageUri(uri: Uri) {
+        EngageLogger.info("InApp.Render", "Engage action messageId=${content.messageId} type=${uri.host}")
         callbacks.onClicked(content)
         when (uri.host) {
             "dismiss" -> callbacks.onDismissed(content)
@@ -232,6 +280,10 @@ private class EngageDivActionHandler(
                 val arguments = uri.getQueryParameter("arguments")?.let { raw ->
                     runCatching { kotlinx.serialization.json.Json.parseToJsonElement(raw).jsonObject }.getOrNull()
                 } ?: JsonObject(emptyMap())
+                EngageLogger.debug(
+                    "InApp.Render",
+                    "named action messageId=${content.messageId} name=$name argumentKeys=${arguments.keys.sorted()}",
+                )
                 callbacks.onAction(content, name, arguments)
             }
         }

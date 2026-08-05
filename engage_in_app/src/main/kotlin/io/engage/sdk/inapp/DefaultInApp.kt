@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.pm.PackageManager
 import io.engage.sdk.DisplayDecision
 import io.engage.sdk.EmbeddedPresentation
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.InApp
 import io.engage.sdk.InAppContent
 import io.engage.sdk.InAppOverlayDisplayDelegate
@@ -61,12 +62,19 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
     override val overlays: InAppOverlays = defaultOverlays
 
     suspend fun wipe() = mutex.withLock {
+        context.logWarn("InApp", "local state wipe started")
         history.clearAll()
         evaluator.resetContext()
         clearPresentationsLocked()
+        context.logWarn("InApp", "local state wiped")
     }
 
     init {
+        context.logInfo(
+            "InApp",
+            "initialized generation=$currentGeneration installationId=${context.installationId.value} " +
+                "appVersion=${appVersion()} locales=${currentLocales().map(Locale::toLanguageTag)}",
+        )
         context.scope.launch {
             combine(
                 context.documents(EngageSyncModule.IN_APP),
@@ -81,8 +89,16 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
                     generation = generation,
                 )
             }.collect { state ->
+                context.logDebug(
+                    "InApp",
+                    "sync state campaigns=${state.campaigns.size} enabled=${state.enabled} generation=${state.generation}",
+                )
                 mutex.withLock {
                     if (currentGeneration != state.generation) {
+                        context.logInfo(
+                            "InApp",
+                            "generation changed previous=$currentGeneration next=${state.generation}; resetting context",
+                        )
                         currentGeneration = state.generation
                         evaluator.resetContext()
                     }
@@ -98,6 +114,7 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
         }
         context.scope.launch {
             context.signals.collect { signal ->
+                context.logDebug("InApp", "signal received type=${signal::class.simpleName}")
                 mutex.withLock {
                     if (signal == io.engage.sdk.spi.EngageSignal.LocalDataWiped) history.clearAll()
                     evaluator.onSignal(signal)
@@ -111,12 +128,17 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
     override fun placement(key: String): StateFlow<InAppContent?> {
         require(PLACEMENT_KEY.matches(key)) { "Placement keys must match ${PLACEMENT_KEY.pattern}" }
         val flow = placementFlows.getOrPut(key) { MutableStateFlow(null) }
+        context.logInfo("InApp", "placement subscribed key=$key existing=${flow.value?.messageId}")
         requestEvaluation()
         return flow
     }
 
     override fun onVisible(content: InAppContent) {
-        val candidate = resolutions[content.identity()] ?: return
+        val candidate = resolutions[content.identity()] ?: run {
+            context.logWarn("InApp", "visibility ignored messageId=${content.messageId} reason=unknown_resolution")
+            return
+        }
+        context.logInfo("InApp", "content visible messageId=${content.messageId} variant=${content.variantId}")
         context.scope.launch {
             mutex.withLock { evaluator.recordImpression(candidate) }
             enqueue(candidate, InteractionType.IMPRESSION)
@@ -125,11 +147,16 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
     }
 
     override fun onClicked(content: InAppContent) {
+        context.logInfo("InApp", "content clicked messageId=${content.messageId} variant=${content.variantId}")
         interaction(content, InteractionType.CLICK)
     }
 
     override fun onDismissed(content: InAppContent) {
-        val candidate = resolutions[content.identity()] ?: return
+        val candidate = resolutions[content.identity()] ?: run {
+            context.logWarn("InApp", "dismiss ignored messageId=${content.messageId} reason=unknown_resolution")
+            return
+        }
+        context.logInfo("InApp", "content dismissed messageId=${content.messageId} variant=${content.variantId}")
         context.scope.launch {
             mutex.withLock { evaluator.recordDismiss(candidate) }
             enqueue(candidate, InteractionType.DISMISS)
@@ -138,15 +165,27 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
     }
 
     override fun onConversion(content: InAppContent) {
+        context.logInfo("InApp", "conversion reported messageId=${content.messageId} variant=${content.variantId}")
         interaction(content, InteractionType.CONVERSION)
     }
 
     override fun onAction(content: InAppContent, name: String, arguments: JsonObject) {
-        context.scope.launch { context.executeAction(name, arguments) }
+        context.logInfo(
+            "InApp",
+            "action requested messageId=${content.messageId} name=$name argumentKeys=${arguments.keys.sorted()}",
+        )
+        context.scope.launch {
+            val completed = context.executeAction(name, arguments)
+            context.logInfo("InApp", "action finished messageId=${content.messageId} name=$name completed=$completed")
+        }
     }
 
     override fun onRenderFailed(content: InAppContent) {
-        val candidate = resolutions[content.identity()] ?: return
+        val candidate = resolutions[content.identity()] ?: run {
+            context.logWarn("InApp", "render failure ignored messageId=${content.messageId} reason=unknown_resolution")
+            return
+        }
+        context.logWarn("InApp", "render failed messageId=${content.messageId} variant=${content.variantId}")
         context.scope.launch {
             mutex.withLock { evaluator.consume(candidate) }
             evaluate()
@@ -154,12 +193,18 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
     }
 
     private fun interaction(content: InAppContent, type: InteractionType) {
-        val candidate = resolutions[content.identity()] ?: return
+        val candidate = resolutions[content.identity()] ?: run {
+            context.logWarn(
+                "InApp",
+                "interaction ignored messageId=${content.messageId} type=$type reason=unknown_resolution",
+            )
+            return
+        }
         context.scope.launch { enqueue(candidate, type) }
     }
 
     private suspend fun enqueue(candidate: ResolvedContent, type: InteractionType) {
-        context.enqueue(
+        val accepted = context.enqueue(
             EngageModuleOperation.Interaction(
                 experienceId = candidate.campaign.experienceId,
                 messageId = candidate.campaign.messageId,
@@ -167,9 +212,15 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
                 type = type,
             ),
         )
+        context.logDebug(
+            "InApp",
+            "interaction enqueued experienceId=${candidate.campaign.experienceId} " +
+                "messageId=${candidate.campaign.messageId} type=$type accepted=$accepted",
+        )
     }
 
     private fun requestEvaluation() {
+        context.logVerbose("InApp", "evaluation requested")
         context.scope.launch { evaluate() }
     }
 
@@ -177,11 +228,20 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
         mutex.withLock {
             delayedEvaluation?.cancel()
             delayedEvaluation = null
-            if (!enabled) return
+            if (!enabled) {
+                context.logVerbose("InApp", "evaluation skipped reason=disabled")
+                return
+            }
             val candidates = evaluator.candidates()
+            context.logDebug(
+                "InApp",
+                "evaluation candidates=${candidates.size} placements=${placementFlows.keys.sorted()} " +
+                    "overlayActive=${overlayPresenter.activeContent?.messageId}",
+            )
             updatePlacementsLocked(candidates)
             updateOverlayLocked(candidates)
             evaluator.nextEvaluationDelayMillis()?.let { waitMillis ->
+                context.logVerbose("InApp", "next evaluation scheduled delayMillis=$waitMillis")
                 delayedEvaluation = context.scope.launch {
                     delay(waitMillis)
                     evaluate()
@@ -200,9 +260,15 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
             if (selected == null) {
                 activePlacements.remove(key)
                 flow.value = null
+                context.logDebug("InApp", "placement cleared key=$key")
             } else {
                 activePlacements[key] = selected
                 flow.value = selected.toPublic().also(::remember)
+                context.logInfo(
+                    "InApp",
+                    "placement selected key=$key experienceId=${selected.campaign.experienceId} " +
+                        "messageId=${selected.campaign.messageId}",
+                )
             }
         }
     }
@@ -213,40 +279,65 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
         if (activeContent != null) {
             if (activityMonitor?.current == null) {
                 withContext(Dispatchers.Main.immediate) { overlayPresenter.dismiss(reportDismissal = false) }
+                context.logDebug("InApp", "active overlay dismissed reason=no_activity")
                 return
             }
             val active = resolutions[activeContent.identity()]
             if (active == null || !evaluator.remainsContextuallyEligible(active)) {
                 withContext(Dispatchers.Main.immediate) { overlayPresenter.dismiss(reportDismissal = false) }
+                context.logDebug("InApp", "active overlay dismissed reason=no_longer_eligible")
                 return
             }
             val challenger = overlayCandidates.firstOrNull { it.instanceKey != active.instanceKey } ?: return
             when (challenger.campaign.conflictPolicy) {
-                ConflictPolicy.QUEUE -> Unit
-                ConflictPolicy.SKIP -> evaluator.consume(challenger)
+                ConflictPolicy.QUEUE -> context.logDebug("InApp", "challenger queued messageId=${challenger.campaign.messageId}")
+                ConflictPolicy.SKIP -> {
+                    evaluator.consume(challenger)
+                    context.logDebug("InApp", "challenger skipped messageId=${challenger.campaign.messageId}")
+                }
                 ConflictPolicy.REPLACE_LOWER_PRIORITY -> if (challenger.campaign.priority > active.campaign.priority) {
                     withContext(Dispatchers.Main.immediate) { overlayPresenter.dismiss(reportDismissal = false) }
+                    context.logInfo(
+                        "InApp",
+                        "active overlay replaced active=${active.campaign.messageId} " +
+                            "challenger=${challenger.campaign.messageId}",
+                    )
                 }
             }
             return
         }
-        if (defaultOverlays.isPaused) return
-        val activity = activityMonitor?.current ?: return
+        if (defaultOverlays.isPaused) {
+            context.logDebug("InApp", "overlay selection deferred reason=paused")
+            return
+        }
+        val activity = activityMonitor?.current ?: run {
+            context.logVerbose("InApp", "overlay selection deferred reason=no_activity")
+            return
+        }
         val selected = overlayCandidates.firstOrNull() ?: return
         val content = selected.toPublic().also(::remember)
         val decision = withContext(Dispatchers.Main.immediate) {
             defaultOverlays.displayDelegate?.decide(content) ?: DisplayDecision.ALLOW
         }
+        context.logInfo(
+            "InApp",
+            "overlay decision experienceId=${content.experienceId} messageId=${content.messageId} decision=$decision",
+        )
         when (decision) {
             DisplayDecision.DEFER -> return
             DisplayDecision.DISCARD -> evaluator.consume(selected)
             DisplayDecision.ALLOW -> withContext(Dispatchers.Main.immediate) {
                 overlayPresenter.show(activity, content, this@DefaultInApp, ::requestEvaluation)
+                context.logInfo("InApp", "overlay show requested messageId=${content.messageId}")
             }
         }
     }
 
     private suspend fun clearPresentationsLocked() {
+        context.logDebug(
+            "InApp",
+            "clearing presentations placements=${activePlacements.size} resolutions=${resolutions.size}",
+        )
         activePlacements.clear()
         placementFlows.values.forEach { it.value = null }
         resolutions.clear()
@@ -257,6 +348,10 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
         val candidate = activePlacements.values.firstOrNull { it.matches(content) }
             ?: evaluator.candidates().firstOrNull { it.matches(content) }
         if (candidate != null) resolutions[content.identity()] = candidate
+        context.logVerbose(
+            "InApp",
+            "resolution remembered messageId=${content.messageId} found=${candidate != null}",
+        )
     }
 
     private fun appVersion(): String = runCatching {
@@ -304,7 +399,8 @@ private class DefaultOverlays(private val onChanged: () -> Unit) : InAppOverlays
     val isPaused: Boolean get() = pauses.get() > 0
 
     override fun pause() {
-        pauses.incrementAndGet()
+        val count = pauses.incrementAndGet()
+        EngageLogger.info("InApp", "overlays paused depth=$count")
     }
 
     override fun resume() {
@@ -312,6 +408,7 @@ private class DefaultOverlays(private val onChanged: () -> Unit) : InAppOverlays
             val current = pauses.get()
             if (current == 0 || pauses.compareAndSet(current, current - 1)) break
         }
+        EngageLogger.info("InApp", "overlays resumed depth=${pauses.get()}")
         onChanged()
     }
 }

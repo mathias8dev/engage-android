@@ -1,6 +1,7 @@
 package io.engage.sdk.inapp.data
 
 import io.engage.sdk.BackdropPolicy
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.DismissalPolicy
 import io.engage.sdk.EmbeddedPresentation
 import io.engage.sdk.EmptyStatePolicy
@@ -31,6 +32,18 @@ internal object InAppDocumentParser {
     fun parse(document: EngageRemoteDocument): Campaign? = runCatching {
         val payload = document.payload
         if (payload.string("source") == "AUTOMATION") parseAutomation(document) else parseExperience(document)
+    }.onSuccess { campaign ->
+        EngageLogger.debug(
+            "InAppParser",
+            "document parsed key=${document.key} revision=${document.revision} messageId=${campaign.messageId} " +
+                "variants=${campaign.variants.size}",
+        )
+    }.onFailure { error ->
+        EngageLogger.warn(
+            "InAppParser",
+            "document rejected key=${document.key} revision=${document.revision}",
+            error,
+        )
     }.getOrNull()
 
     private fun parseExperience(document: EngageRemoteDocument): Campaign {

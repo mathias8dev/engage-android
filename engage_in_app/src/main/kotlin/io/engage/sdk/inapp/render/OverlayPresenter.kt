@@ -13,6 +13,7 @@ import io.engage.sdk.BackdropPolicy
 import io.engage.sdk.DismissalPolicy
 import io.engage.sdk.InAppAnimation
 import io.engage.sdk.InAppContent
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.OverlayFormat
 import io.engage.sdk.OverlayPosition
 import io.engage.sdk.OverlayPresentation
@@ -30,8 +31,23 @@ internal class OverlayPresenter {
         callbacks: InAppRenderCallbacks,
         onClosed: () -> Unit,
     ): Boolean {
-        if (active != null || activity.isFinishing || activity.isDestroyed) return false
-        val presentation = content.presentation as? OverlayPresentation ?: return false
+        if (active != null || activity.isFinishing || activity.isDestroyed) {
+            EngageLogger.debug(
+                "InApp.Overlay",
+                "show rejected messageId=${content.messageId} active=${active?.content?.messageId} " +
+                    "finishing=${activity.isFinishing} destroyed=${activity.isDestroyed}",
+            )
+            return false
+        }
+        val presentation = content.presentation as? OverlayPresentation ?: run {
+            EngageLogger.warn("InApp.Overlay", "show rejected messageId=${content.messageId} reason=not_overlay")
+            return false
+        }
+        EngageLogger.info(
+            "InApp.Overlay",
+            "showing messageId=${content.messageId} format=${presentation.format} " +
+                "dismissal=${presentation.dismissal} backdrop=${presentation.backdrop}",
+        )
         val dialog = Dialog(activity)
         var dismissalReported = false
         val handler = Handler(Looper.getMainLooper())
@@ -45,6 +61,7 @@ internal class OverlayPresenter {
             }
 
             override fun onRenderFailed(content: InAppContent) {
+                EngageLogger.warn("InApp.Overlay", "render failed messageId=${content.messageId}; closing")
                 callbacks.onRenderFailed(content)
                 dialog.dismiss()
             }
@@ -54,6 +71,7 @@ internal class OverlayPresenter {
         dialog.setCancelable(presentation.dismissal == DismissalPolicy.USER_DISMISSIBLE)
         dialog.setCanceledOnTouchOutside(presentation.dismissal == DismissalPolicy.USER_DISMISSIBLE)
         dialog.setOnCancelListener {
+            EngageLogger.debug("InApp.Overlay", "dialog cancelled messageId=${content.messageId}")
             if (!dismissalReported) {
                 dismissalReported = true
                 callbacks.onDismissed(content)
@@ -62,6 +80,7 @@ internal class OverlayPresenter {
         dialog.setOnDismissListener {
             handler.removeCallbacksAndMessages(dialog)
             active = null
+            EngageLogger.info("InApp.Overlay", "closed messageId=${content.messageId}")
             onClosed()
         }
         dialog.window?.apply {
@@ -75,13 +94,16 @@ internal class OverlayPresenter {
         }
         active = ActiveOverlay(content, dialog, callbacks)
         dialog.show()
+        EngageLogger.debug("InApp.Overlay", "dialog shown messageId=${content.messageId}")
         configureWindow(dialog, presentation)
         animateIn(view, presentation.animation)
         if (presentation.dismissal == DismissalPolicy.AUTO_DISMISS) {
             val delay = requireNotNull(presentation.autoDismissAfterSeconds).toLong() * 1_000L
+            EngageLogger.debug("InApp.Overlay", "auto-dismiss scheduled messageId=${content.messageId} delayMillis=$delay")
             handler.postAtTime(
                 {
                     if (!dismissalReported && dialog.isShowing) {
+                        EngageLogger.info("InApp.Overlay", "auto-dismissed messageId=${content.messageId}")
                         dismissalReported = true
                         callbacks.onDismissed(content)
                         dialog.dismiss()
@@ -95,7 +117,14 @@ internal class OverlayPresenter {
     }
 
     fun dismiss(reportDismissal: Boolean) {
-        val current = active ?: return
+        val current = active ?: run {
+            EngageLogger.verbose("InApp.Overlay", "dismiss ignored reason=no_active_overlay")
+            return
+        }
+        EngageLogger.info(
+            "InApp.Overlay",
+            "dismiss requested messageId=${current.content.messageId} reportDismissal=$reportDismissal",
+        )
         if (reportDismissal) current.callbacks.onDismissed(current.content)
         current.dialog.dismiss()
     }
@@ -114,9 +143,14 @@ internal class OverlayPresenter {
                 else -> Gravity.CENTER
             },
         )
+        EngageLogger.debug(
+            "InApp.Overlay",
+            "window configured format=${presentation.format} position=${presentation.position} width=$width height=$height",
+        )
     }
 
     private fun animateIn(view: android.view.View, animation: InAppAnimation) {
+        EngageLogger.verbose("InApp.Overlay", "entry animation=$animation")
         when (animation) {
             InAppAnimation.NONE -> Unit
             InAppAnimation.FADE -> view.apply { alpha = 0f; animate().alpha(1f).setDuration(220).start() }
@@ -140,4 +174,3 @@ internal class OverlayPresenter {
         val callbacks: InAppRenderCallbacks,
     )
 }
-

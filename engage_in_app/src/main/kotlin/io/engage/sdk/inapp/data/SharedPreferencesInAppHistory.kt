@@ -2,6 +2,7 @@ package io.engage.sdk.inapp.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.inapp.domain.ImpressionHistory
 import io.engage.sdk.inapp.domain.InAppHistory
 import java.nio.charset.StandardCharsets
@@ -24,10 +25,12 @@ internal class SharedPreferencesInAppHistory(
     @Synchronized
     override fun beginSession(): Long {
         val nextId = sessionId + 1
+        val nextCount = sessionCount + 1
         preferences.edit()
             .putLong(globalKey("session_id"), nextId)
-            .putInt(globalKey("session_count"), sessionCount + 1)
+            .putInt(globalKey("session_count"), nextCount)
             .apply()
+        EngageLogger.info("InAppHistory", "session persisted generation=${generation()} id=$nextId count=$nextCount")
         return nextId
     }
 
@@ -58,16 +61,26 @@ internal class SharedPreferencesInAppHistory(
             .putInt("$key.day_count", if (current.day == day) current.dayCount + 1 else 1)
             .putLong("$key.impression_at", at.toEpochMilli())
             .apply()
+        EngageLogger.debug(
+            "InAppHistory",
+            "impression persisted generation=${generation()} campaignHash=${campaignKey.sha256().take(12)} " +
+                "total=${current.total + 1}",
+        )
     }
 
     @Synchronized
     override fun recordDismiss(campaignKey: String, at: Instant) {
         preferences.edit().putLong("${campaignKey(campaignKey)}.dismissed_at", at.toEpochMilli()).apply()
+        EngageLogger.debug(
+            "InAppHistory",
+            "dismiss persisted generation=${generation()} campaignHash=${campaignKey.sha256().take(12)}",
+        )
     }
 
     @Synchronized
     fun clearAll() {
         preferences.edit().clear().apply()
+        EngageLogger.warn("InAppHistory", "history cleared")
     }
 
     private fun globalKey(suffix: String): String = "g${generation()}.$suffix"

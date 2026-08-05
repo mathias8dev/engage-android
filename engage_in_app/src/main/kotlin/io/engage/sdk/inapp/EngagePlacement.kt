@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.viewinterop.AndroidView
 import io.engage.sdk.EmbeddedPresentation
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.EmptyStatePolicy
 import io.engage.sdk.inapp.render.EngageContentView
 
@@ -29,6 +30,7 @@ internal fun EngagePlacement(
     val density = LocalDensity.current
     val current = content
     if (current == null) {
+        SideEffect { EngageLogger.verbose("InApp.Placement", "empty key=$key reservedHeightPx=$reservedHeightPx") }
         if (placeholder != null) {
             placeholder.invoke()
         } else if (reservedHeightPx > 0) {
@@ -38,14 +40,22 @@ internal fun EngagePlacement(
         val reserveSpace = (current.presentation as? EmbeddedPresentation)?.emptyState == EmptyStatePolicy.RESERVE_SPACE
         SideEffect {
             if (!reserveSpace) reservedHeightPx = 0
+            EngageLogger.debug(
+                "InApp.Placement",
+                "rendering key=$key messageId=${current.messageId} reserveSpace=$reserveSpace",
+            )
         }
         key(current.experienceId, current.messageId, current.variantId) {
             AndroidView(
                 factory = { context ->
+                    EngageLogger.debug("InApp.Placement", "view created key=$key messageId=${current.messageId}")
                     EngageContentView(context, current, EngageInAppModule.requireRenderCallbacks())
                 },
                 modifier = if (reserveSpace) {
-                    modifier.onSizeChanged { reservedHeightPx = it.height }
+                    modifier.onSizeChanged {
+                        reservedHeightPx = it.height
+                        EngageLogger.verbose("InApp.Placement", "size changed key=$key heightPx=${it.height}")
+                    }
                 } else {
                     modifier
                 },
