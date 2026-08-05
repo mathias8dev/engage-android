@@ -6,6 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import io.engage.sdk.InboxEntryId
 import io.engage.sdk.InboxRenderingSnapshot
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -17,6 +18,7 @@ internal class RenderingStore(
     private var activeGeneration: Long? = null
 
     override fun onCreate(database: SQLiteDatabase) {
+        EngageLogger.debug("MessageCenter.RenderingStore", "database schema creating version=$DATABASE_VERSION")
         database.execSQL(
             """
             CREATE TABLE inbox_renderings (
@@ -30,23 +32,33 @@ internal class RenderingStore(
             )
             """.trimIndent(),
         )
+        EngageLogger.debug("MessageCenter.RenderingStore", "database schema created")
     }
 
     override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
 
     @Synchronized
     fun activateGeneration(generation: Long) {
+        EngageLogger.debug("MessageCenter.RenderingStore", "generation activating generation=$generation")
         writableDatabase.delete(
             "inbox_renderings",
             "generation != ?",
             arrayOf(generation.toString()),
         )
         activeGeneration = generation
+        EngageLogger.verbose("MessageCenter.RenderingStore", "generation active generation=$generation")
     }
 
     @Synchronized
     fun read(generation: Long, entryIds: Collection<InboxEntryId>): Map<InboxEntryId, RenderingResolution> {
-        if (generation != activeGeneration || entryIds.isEmpty()) return emptyMap()
+        if (generation != activeGeneration || entryIds.isEmpty()) {
+            EngageLogger.verbose(
+                "MessageCenter.RenderingStore",
+                "read skipped generation=$generation active=$activeGeneration count=${entryIds.size}",
+            )
+            return emptyMap()
+        }
+        EngageLogger.verbose("MessageCenter.RenderingStore", "read started generation=$generation count=${entryIds.size}")
         val result = linkedMapOf<InboxEntryId, RenderingResolution>()
         entryIds.chunked(MAX_SQL_ARGUMENTS).forEach { chunk ->
             val placeholders = chunk.joinToString(",") { "?" }
@@ -76,6 +88,10 @@ internal class RenderingStore(
                             )
                         }.getOrNull()
                         if (resolution == null) {
+                            EngageLogger.warn(
+                                "MessageCenter.RenderingStore",
+                                "corrupt rendering evicted entryId=$entryId generation=$generation",
+                            )
                             writableDatabase.delete(
                                 "inbox_renderings",
                                 "generation = ? AND entry_id = ?",
@@ -88,12 +104,20 @@ internal class RenderingStore(
                 }
             }
         }
+        EngageLogger.debug("MessageCenter.RenderingStore", "read completed generation=$generation hits=${result.size}")
         return result
     }
 
     @Synchronized
     fun write(generation: Long, resolutions: Collection<RenderingResolution>): Boolean {
-        if (generation != activeGeneration) return false
+        if (generation != activeGeneration) {
+            EngageLogger.debug(
+                "MessageCenter.RenderingStore",
+                "write rejected generation=$generation active=$activeGeneration count=${resolutions.size}",
+            )
+            return false
+        }
+        EngageLogger.debug("MessageCenter.RenderingStore", "write started generation=$generation count=${resolutions.size}")
         writableDatabase.transaction {
             resolutions.forEach { resolution ->
                 insertWithOnConflict(
@@ -121,13 +145,16 @@ internal class RenderingStore(
                 )
             }
         }
+        EngageLogger.debug("MessageCenter.RenderingStore", "write completed generation=$generation count=${resolutions.size}")
         return true
     }
 
     @Synchronized
     fun clear() {
+        EngageLogger.warn("MessageCenter.RenderingStore", "all cached renderings clearing")
         writableDatabase.delete("inbox_renderings", null, null)
         activeGeneration = null
+        EngageLogger.warn("MessageCenter.RenderingStore", "all cached renderings cleared")
     }
 
     private companion object {

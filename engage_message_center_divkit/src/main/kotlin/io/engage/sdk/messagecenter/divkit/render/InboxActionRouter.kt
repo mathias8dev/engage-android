@@ -2,6 +2,7 @@ package io.engage.sdk.messagecenter.divkit.render
 
 import android.net.Uri
 import io.engage.sdk.Inbox
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.InboxEntryId
 import io.engage.sdk.MessageCenterRenderingSupport
 import kotlinx.serialization.json.Json
@@ -19,7 +20,14 @@ internal class InboxActionRouter(
     }
 
     suspend fun handle(uri: Uri, entryId: InboxEntryId): Boolean {
-        if (!supports(uri)) return false
+        if (!supports(uri)) {
+            EngageLogger.debug(
+                "MessageCenter.Action",
+                "unsupported route entryId=$entryId scheme=${uri.scheme} host=${uri.host}",
+            )
+            return false
+        }
+        EngageLogger.info("MessageCenter.Action", "route handling entryId=$entryId type=${uri.host}")
         return when (uri.host) {
             MARK_READ -> {
                 inbox.markRead(entryId)
@@ -36,6 +44,10 @@ internal class InboxActionRouter(
             ACTION -> {
                 val name = requireNotNull(uri.pathSegments.firstOrNull())
                 val arguments = uri.getQueryParameter(ARGUMENTS)?.let(::decodeArguments) ?: JsonObject(emptyMap())
+                EngageLogger.debug(
+                    "MessageCenter.Action",
+                    "custom action entryId=$entryId name=$name argumentKeys=${arguments.keys.sorted()}",
+                )
                 inbox.markRead(entryId)
                 renderingSupport.executeAction(name, arguments)
                 true
@@ -45,12 +57,14 @@ internal class InboxActionRouter(
     }
 
     suspend fun markOpened(entryId: InboxEntryId) {
+        EngageLogger.info("MessageCenter.Action", "entry opened entryId=$entryId")
         inbox.markRead(entryId)
     }
 
     private fun decodeArguments(raw: String): JsonObject = try {
         Json.parseToJsonElement(raw).jsonObject
     } catch (error: Exception) {
+        EngageLogger.error("MessageCenter.Action", "action arguments invalid", error)
         throw IllegalArgumentException("Invalid Engage action arguments", error)
     }
 

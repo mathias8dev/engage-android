@@ -4,6 +4,7 @@ import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import io.engage.sdk.EngageLogger
 import kotlinx.coroutines.CoroutineScope
 
 internal class InboxAdapter(
@@ -11,13 +12,17 @@ internal class InboxAdapter(
     private val actionRouter: InboxActionRouter,
 ) : ListAdapter<InboxUiItem, InboxAdapter.ViewHolder>(DIFF) {
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder =
-        ViewHolder(InboxDivKitView(parent.context, scope, actionRouter))
+        ViewHolder(InboxDivKitView(parent.context, scope, actionRouter)).also {
+            EngageLogger.verbose("MessageCenter.Adapter", "view holder created viewType=$viewType")
+        }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        EngageLogger.verbose("MessageCenter.Adapter", "view holder binding position=$position entryId=${getItem(position).entry.id}")
         holder.view.bind(getItem(position))
     }
 
     override fun onViewRecycled(holder: ViewHolder) {
+        EngageLogger.verbose("MessageCenter.Adapter", "view holder recycling position=${holder.bindingAdapterPosition}")
         holder.view.recycle()
         super.onViewRecycled(holder)
     }

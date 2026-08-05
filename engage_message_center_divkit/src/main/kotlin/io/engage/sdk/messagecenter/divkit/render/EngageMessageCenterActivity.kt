@@ -22,6 +22,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import io.engage.sdk.Engage
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.InboxEntryId
 import io.engage.sdk.InboxPager
 import io.engage.sdk.InboxPagerState
@@ -53,6 +54,7 @@ public class EngageMessageCenterActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        EngageLogger.info("MessageCenter.Activity", "created restored=${savedInstanceState != null}")
         val runtime = EngageMessageCenterDivKitModule.requireRuntime()
         val inbox = Engage.messageCenter.inbox
         pager = inbox.pager(PAGE_SIZE)
@@ -66,6 +68,11 @@ public class EngageMessageCenterActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
                     pager.state.collect { state ->
+                        EngageLogger.verbose(
+                            "MessageCenter.Activity",
+                            "pager state entries=${state.entries.size} refreshing=${state.isRefreshing} " +
+                                "loadingMore=${state.isLoadingMore} hasMore=${state.hasMore} error=${state.error?.code}",
+                        )
                         pagerState = state
                         render()
                         requestNextPageIfNeeded()
@@ -76,6 +83,7 @@ public class EngageMessageCenterActivity : ComponentActivity() {
                         .map { state -> state.entries.map { entry -> entry.id } }
                         .distinctUntilChanged()
                         .collectLatest { entryIds ->
+                            EngageLogger.debug("MessageCenter.Activity", "renderings loading entries=${entryIds.size}")
                             renderings = runtime.repository.cached(entryIds)
                             renderingError = false
                             render()
@@ -85,6 +93,7 @@ public class EngageMessageCenterActivity : ComponentActivity() {
                                 } catch (error: Throwable) {
                                     if (error is CancellationException) throw error
                                     if (error !is RenderingGenerationChangedException) renderingError = true
+                                    EngageLogger.error("MessageCenter.Activity", "rendering resolution failed", error)
                                 }
                                 render()
                             }
@@ -95,11 +104,13 @@ public class EngageMessageCenterActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        EngageLogger.info("MessageCenter.Activity", "destroying")
         if (::pager.isInitialized) pager.close()
         super.onDestroy()
     }
 
     private fun createContentView(): View {
+        EngageLogger.debug("MessageCenter.Activity", "content view creating")
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(resolveThemeColor(android.R.attr.colorBackground, 0xFFFFFFFF.toInt()))
@@ -128,6 +139,7 @@ public class EngageMessageCenterActivity : ComponentActivity() {
             addItemDecoration(InboxSpacingDecoration(dp(8)))
             addOnScrollListener(object : RecyclerView.OnScrollListener() {
                 override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                    EngageLogger.verbose("MessageCenter.Activity", "list scrolled dx=$dx dy=$dy")
                     requestNextPageIfNeeded()
                 }
             })
@@ -157,6 +169,7 @@ public class EngageMessageCenterActivity : ComponentActivity() {
             setOnRefreshListener { refreshAll() }
         }
         root.addView(swipeRefresh, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        EngageLogger.debug("MessageCenter.Activity", "content view created")
         return root
     }
 
@@ -170,7 +183,10 @@ public class EngageMessageCenterActivity : ComponentActivity() {
                 text = BACK_GLYPH
                 contentDescription = getString(R.string.engage_message_center_back)
                 isAllCaps = false
-                setOnClickListener { finish() }
+                setOnClickListener {
+                    EngageLogger.info("MessageCenter.Activity", "back requested")
+                    finish()
+                }
             },
             LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.MATCH_PARENT),
         )
@@ -187,6 +203,7 @@ public class EngageMessageCenterActivity : ComponentActivity() {
                 setText(R.string.engage_message_center_mark_all_read)
                 isAllCaps = false
                 setOnClickListener {
+                    EngageLogger.info("MessageCenter.Activity", "mark all read requested")
                     lifecycleScope.launch { Engage.messageCenter.inbox.markAllRead() }
                 }
             },
@@ -195,6 +212,7 @@ public class EngageMessageCenterActivity : ComponentActivity() {
     }
 
     private fun refreshAll() {
+        EngageLogger.info("MessageCenter.Activity", "manual refresh requested")
         lifecycleScope.launch {
             pager.refresh()
             val entryIds = pager.state.value.entries.map { entry -> entry.id }
@@ -205,9 +223,11 @@ public class EngageMessageCenterActivity : ComponentActivity() {
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
                     if (error !is RenderingGenerationChangedException) renderingError = true
+                    EngageLogger.error("MessageCenter.Activity", "manual rendering refresh failed", error)
                 }
             }
             render()
+            EngageLogger.info("MessageCenter.Activity", "manual refresh completed entries=${pager.state.value.entries.size}")
         }
     }
 
@@ -217,11 +237,20 @@ public class EngageMessageCenterActivity : ComponentActivity() {
         val lastVisible = manager.findLastVisibleItemPosition()
         if (lastVisible < adapter.itemCount - PREFETCH_DISTANCE) return
         if (loadNextJob?.isActive == true) return
+        EngageLogger.debug(
+            "MessageCenter.Activity",
+            "next page requested lastVisible=$lastVisible itemCount=${adapter.itemCount}",
+        )
         loadNextJob = lifecycleScope.launch { pager.loadNextPage() }
     }
 
     private fun render() {
         if (!::adapter.isInitialized || !::swipeRefresh.isInitialized) return
+        EngageLogger.verbose(
+            "MessageCenter.Activity",
+            "rendering UI entries=${pagerState.entries.size} renderings=${renderings.size} " +
+                "pagerError=${pagerState.error?.code} renderingError=$renderingError",
+        )
         adapter.submitList(
             pagerState.entries.map { entry -> InboxUiItem(entry, renderings[entry.id]) },
             ::requestNextPageIfNeeded,

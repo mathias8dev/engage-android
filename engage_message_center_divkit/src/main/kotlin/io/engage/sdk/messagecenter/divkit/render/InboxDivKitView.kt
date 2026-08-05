@@ -21,6 +21,7 @@ import com.yandex.div.data.DivParsingEnvironment
 import com.yandex.div.json.ParsingErrorLogger
 import com.yandex.div2.DivData
 import io.engage.sdk.InboxEntry
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.messagecenter.divkit.R
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.coroutines.CoroutineScope
@@ -48,9 +49,15 @@ internal class InboxDivKitView(
 
     init {
         minimumHeight = dp(72)
+        EngageLogger.verbose("MessageCenter.DivKit", "item view created")
     }
 
     fun bind(item: InboxUiItem) {
+        EngageLogger.debug(
+            "MessageCenter.DivKit",
+            "binding entryId=${item.entry.id} read=${item.entry.readAt != null} " +
+                "rendering=${item.rendering?.let { it::class.simpleName } ?: "loading"}",
+        )
         if (boundItem?.entry?.id != item.entry.id) visibilityReported = item.entry.readAt != null
         boundItem = item
         divView?.cleanup()
@@ -70,7 +77,12 @@ internal class InboxDivKitView(
             }.onSuccess { view ->
                 divView = view
                 addView(view, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-            }.onFailure {
+                EngageLogger.debug(
+                    "MessageCenter.DivKit",
+                    "rendering bound entryId=${item.entry.id} revision=${rendering.snapshot.revision}",
+                )
+            }.onFailure { error ->
+                EngageLogger.error("MessageCenter.DivKit", "rendering failed entryId=${item.entry.id}", error)
                 addCentered(
                     TextView(context).apply {
                         setText(R.string.engage_message_center_unavailable)
@@ -84,6 +96,7 @@ internal class InboxDivKitView(
     }
 
     fun recycle() {
+        EngageLogger.verbose("MessageCenter.DivKit", "item recycled entryId=${boundItem?.entry?.id}")
         boundItem = null
         divView?.cleanup()
         divView = null
@@ -92,10 +105,12 @@ internal class InboxDivKitView(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        EngageLogger.verbose("MessageCenter.DivKit", "item attached entryId=${boundItem?.entry?.id}")
         viewTreeObserver.addOnPreDrawListener(preDrawListener)
     }
 
     override fun onDetachedFromWindow() {
+        EngageLogger.verbose("MessageCenter.DivKit", "item detached entryId=${boundItem?.entry?.id}")
         if (viewTreeObserver.isAlive) viewTreeObserver.removeOnPreDrawListener(preDrawListener)
         super.onDetachedFromWindow()
     }
@@ -104,6 +119,10 @@ internal class InboxDivKitView(
         entry: InboxEntry,
         rendering: RenderingResolution.Available,
     ): Div2View {
+        EngageLogger.debug(
+            "MessageCenter.DivKit",
+            "DivKit parsing entryId=${entry.id} revision=${rendering.snapshot.revision}",
+        )
         val json = JSONObject(rendering.snapshot.document.toString())
         val environment = DivParsingEnvironment(ParsingErrorLogger.LOG)
         json.optJSONObject("templates")?.let(environment::parseTemplates)
@@ -118,6 +137,7 @@ internal class InboxDivKitView(
             check(setData(data, DivDataTag("inbox:${entry.id.value}:${rendering.snapshot.revision}"))) {
                 "DivKit rejected the Inbox snapshot"
             }
+            EngageLogger.debug("MessageCenter.DivKit", "DivKit data accepted entryId=${entry.id}")
         }
     }
 
@@ -131,6 +151,7 @@ internal class InboxDivKitView(
         val totalArea = width.toLong() * height.toLong()
         if (totalArea > 0 && visibleArea * 2 >= totalArea) {
             visibilityReported = true
+            EngageLogger.info("MessageCenter.DivKit", "entry visibility threshold reached entryId=${item.entry.id}")
             scope.launch { actionRouter.markOpened(item.entry.id) }
         }
     }
@@ -167,8 +188,17 @@ private class InboxDivActionHandler(
 ) : DivActionHandler() {
     override fun handleActionUrl(actionUrl: Uri?, view: DivViewFacade): Boolean {
         actionUrl ?: return false
+        EngageLogger.info(
+            "MessageCenter.DivKit",
+            "DivKit action entryId=${entry.id} scheme=${actionUrl.scheme} host=${actionUrl.host}",
+        )
         if (router.supports(actionUrl)) {
-            scope.launch { runCatching { router.handle(actionUrl, entry.id) } }
+            scope.launch {
+                runCatching { router.handle(actionUrl, entry.id) }
+                    .onFailure { error ->
+                        EngageLogger.error("MessageCenter.DivKit", "action failed entryId=${entry.id}", error)
+                    }
+            }
             return true
         }
         scope.launch { router.markOpened(entry.id) }
