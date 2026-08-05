@@ -103,6 +103,7 @@ internal interface ExposureStore {
 
 internal fun DeviceMetadata.toBootstrapRequest(recoveryToken: String?): BootstrapRequest =
     BootstrapRequest(
+        platform = "ANDROID",
         locale = locale,
         timezone = timezone,
         sdkVersion = sdkVersion,

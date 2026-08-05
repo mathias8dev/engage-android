@@ -3,6 +3,7 @@ package io.engage.sdk.spi
 import android.content.Context
 import androidx.annotation.RestrictTo
 import io.engage.sdk.EngageConfig
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.SdkFeature
 import kotlinx.coroutines.CoroutineScope
@@ -97,6 +98,14 @@ public interface EngageModuleContext {
     public val privacy: StateFlow<PrivacyState>
     public val enabledFeatures: StateFlow<Set<SdkFeature>>
     public val signals: SharedFlow<EngageSignal>
+
+    public fun logVerbose(component: String, message: String) = EngageLogger.verbose(component, message)
+    public fun logDebug(component: String, message: String) = EngageLogger.debug(component, message)
+    public fun logInfo(component: String, message: String) = EngageLogger.info(component, message)
+    public fun logWarn(component: String, message: String, error: Throwable? = null) =
+        EngageLogger.warn(component, message, error)
+    public fun logError(component: String, message: String, error: Throwable? = null) =
+        EngageLogger.error(component, message, error)
 
     public fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>>
     /** Returns true only after the operation has been accepted by the durable core outbox. */

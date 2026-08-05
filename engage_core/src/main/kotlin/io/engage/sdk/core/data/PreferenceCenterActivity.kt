@@ -9,6 +9,7 @@ import android.widget.Switch
 import android.widget.TextView
 import io.engage.sdk.Channel
 import io.engage.sdk.Engage
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.PreferenceCenterSnapshot
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -21,6 +22,7 @@ public class PreferenceCenterActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        EngageLogger.info("PreferencesUI", "activity created key=${intent.getStringExtra(EXTRA_CENTER_KEY) ?: "default"}")
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24.dp, 24.dp, 24.dp, 24.dp)
@@ -32,11 +34,16 @@ public class PreferenceCenterActivity : Activity() {
     }
 
     override fun onDestroy() {
+        EngageLogger.info("PreferencesUI", "activity destroyed")
         scope.cancel()
         super.onDestroy()
     }
 
     private fun render(snapshot: PreferenceCenterSnapshot?) {
+        EngageLogger.debug(
+            "PreferencesUI",
+            "render snapshot=${snapshot?.key} sections=${snapshot?.sections?.size ?: 0}",
+        )
         content.removeAllViews()
         if (snapshot == null) return
         title = snapshot.displayName
@@ -51,6 +58,10 @@ public class PreferenceCenterActivity : Activity() {
                             label = "${subscription.displayName} · ${channel.name.lowercase()}",
                             checked = subscribed,
                         ) { enabled ->
+                            EngageLogger.info(
+                                "PreferencesUI",
+                                "profile choice changed list=${subscription.key} channel=${channel.name} enabled=$enabled",
+                            )
                             Engage.profile.editSubscriptions {
                                 if (enabled) subscribe(subscription.key, setOf(channel))
                                 else unsubscribe(subscription.key, setOf(channel))
@@ -61,6 +72,10 @@ public class PreferenceCenterActivity : Activity() {
                 subscription.installationChoice?.let { subscribed ->
                     content.addView(
                         choice(subscription.displayName, subscribed) { enabled ->
+                            EngageLogger.info(
+                                "PreferencesUI",
+                                "installation choice changed list=${subscription.key} enabled=$enabled",
+                            )
                             Engage.installation.editSubscriptions {
                                 if (enabled) subscribe(subscription.key) else unsubscribe(subscription.key)
                             }
@@ -72,11 +87,27 @@ public class PreferenceCenterActivity : Activity() {
     }
 
     @Suppress("UseSwitchCompatOrMaterialCode")
-    private fun choice(label: String, checked: Boolean, onChange: (Boolean) -> Unit) = Switch(this).apply {
+    private fun choice(label: String, checked: Boolean, onChange: suspend (Boolean) -> Unit) = Switch(this).apply {
         text = label
         isChecked = checked
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        setOnCheckedChangeListener { _, value -> onChange(value) }
+        var reverting = false
+        setOnCheckedChangeListener { button, value ->
+            if (reverting) return@setOnCheckedChangeListener
+            button.isEnabled = false
+            scope.launch {
+                try {
+                    onChange(value)
+                } catch (error: Exception) {
+                    EngageLogger.error("PreferencesUI", "subscription edit failed", error)
+                    reverting = true
+                    button.isChecked = !value
+                    reverting = false
+                } finally {
+                    button.isEnabled = true
+                }
+            }
+        }
     }
 
     private fun LinearLayout.addText(value: String, heading: Boolean = false) {
@@ -93,4 +124,3 @@ public class PreferenceCenterActivity : Activity() {
         public const val EXTRA_CENTER_KEY: String = "io.engage.sdk.preference_center_key"
     }
 }
-

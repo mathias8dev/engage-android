@@ -2,6 +2,7 @@ package io.engage.sdk.core.application
 
 import io.engage.sdk.Privacy
 import io.engage.sdk.PrivacyState
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.core.domain.ExposureStore
 import io.engage.sdk.core.domain.MobileEdgeApi
 import io.engage.sdk.core.domain.OperationOutbox
@@ -43,7 +44,11 @@ internal class DefaultPrivacy(
     override val state: StateFlow<PrivacyState> = sessions.privacy
 
     override suspend fun optOut(): Unit = mutex.withLock {
-        if (state.value == PrivacyState.OPTED_OUT) return@withLock
+        EngageLogger.info("Privacy", "optOut requested current=${state.value}")
+        if (state.value == PrivacyState.OPTED_OUT) {
+            EngageLogger.debug("Privacy", "optOut ignored because state is already OPTED_OUT")
+            return@withLock
+        }
         sessions.setPrivacy(PrivacyState.OPTED_OUT)
         coordinator.enqueue(
             type = OperationType.PRIVACY_STATE_SET,
@@ -51,9 +56,11 @@ internal class DefaultPrivacy(
             allowWhileOptedOut = true,
         )
         scope.launch { coordinator.flush() }
+        EngageLogger.info("Privacy", "local state changed state=OPTED_OUT wipe=false")
     }
 
     override suspend fun optIn(): Unit = mutex.withLock {
+        EngageLogger.info("Privacy", "optIn requested current=${state.value}")
         coordinator.resumeAfterWipe()
         if (state.value != PrivacyState.OPTED_IN) sessions.setPrivacy(PrivacyState.OPTED_IN)
         scope.launch {
@@ -65,9 +72,11 @@ internal class DefaultPrivacy(
             coordinator.flush()
         }
         replayPendingRevocation()
+        EngageLogger.info("Privacy", "local state changed state=OPTED_IN")
     }
 
     override suspend fun optOutAndWipe(): Unit = mutex.withLock {
+        EngageLogger.warn("Privacy", "optOutAndWipe requested")
         val session = coordinator.prepareWipe()
         if (session != null) {
             revocations.save(RevocationEnvelope(newId(), session.revocationCredential))
@@ -79,23 +88,32 @@ internal class DefaultPrivacy(
         sessions.clearSession()
         onLocalDataWiped()
         replayPendingRevocation()
+        EngageLogger.warn("Privacy", "local Engage data wiped revocationPending=${session != null}")
     }
 
     fun replayPendingRevocation() {
-        if (revocationJob?.isActive == true) return
+        if (revocationJob?.isActive == true) {
+            EngageLogger.verbose("Privacy", "revocation replay already active")
+            return
+        }
         revocationJob = scope.launch {
             var backoffMillis = INITIAL_BACKOFF_MILLIS
             while (isActive) {
                 val envelope = revocations.get() ?: break
+                EngageLogger.debug("Privacy", "remote revocation attempt operationId=${envelope.operationId}")
                 val completed = runCatching {
                     api.revoke(endpoint, envelope.credential, envelope.operationId)
+                }.onFailure { error ->
+                    EngageLogger.warn("Privacy", "remote revocation failed operationId=${envelope.operationId}", error)
                 }.isSuccess
                 if (completed) {
                     revocations.clear(envelope.operationId)
+                    EngageLogger.info("Privacy", "remote revocation confirmed operationId=${envelope.operationId}")
                     backoffMillis = INITIAL_BACKOFF_MILLIS
                     continue
                 }
                 delay(backoffMillis)
+                EngageLogger.debug("Privacy", "remote revocation retry scheduled delayMillis=$backoffMillis")
                 backoffMillis = min(backoffMillis * 2, MAX_BACKOFF_MILLIS)
             }
         }

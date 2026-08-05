@@ -1,6 +1,7 @@
 package io.engage.sdk.core.application
 
 import io.engage.sdk.FeatureFlags
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.core.domain.ExposureStore
@@ -34,37 +35,67 @@ internal class DefaultFeatureFlags(
     private val scope: CoroutineScope,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) : FeatureFlags {
-    override fun getBoolean(key: String, default: Boolean): Boolean =
-        resolve(key, "BOOLEAN")?.value?.let { (it as? JsonPrimitive)?.content?.toBooleanStrictOrNull() }
-            ?: default
+    override fun getBoolean(key: String, default: Boolean): Boolean {
+        val resolved = resolve(key, "BOOLEAN")
+        val value = resolved?.value?.let { (it as? JsonPrimitive)?.content?.toBooleanStrictOrNull() }
+        logEvaluation(key, "BOOLEAN", resolved, value != null)
+        return value ?: default
+    }
 
-    override fun getString(key: String, default: String): String =
-        resolve(key, "STRING")?.value?.let { (it as? JsonPrimitive)?.contentOrNull }
-            ?: default
+    override fun getString(key: String, default: String): String {
+        val resolved = resolve(key, "STRING")
+        val value = resolved?.value?.let { (it as? JsonPrimitive)?.contentOrNull }
+        logEvaluation(key, "STRING", resolved, value != null)
+        return value ?: default
+    }
 
-    override fun getNumber(key: String, default: Double): Double =
-        resolve(key, "NUMBER")?.value?.let { (it as? JsonPrimitive)?.doubleOrNull }
-            ?: default
+    override fun getNumber(key: String, default: Double): Double {
+        val resolved = resolve(key, "NUMBER")
+        val value = resolved?.value?.let { (it as? JsonPrimitive)?.doubleOrNull }
+        logEvaluation(key, "NUMBER", resolved, value != null)
+        return value ?: default
+    }
 
     override fun <T> getJson(key: String, serializer: KSerializer<T>, default: T): T {
-        val value = resolve(key, "JSON")?.value ?: return default
-        return runCatching { json.decodeFromJsonElement(serializer, value) }.getOrDefault(default)
+        val resolved = resolve(key, "JSON")
+        val value = resolved?.value ?: run {
+            logEvaluation(key, "JSON", null, false)
+            return default
+        }
+        return runCatching { json.decodeFromJsonElement(serializer, value) }
+            .onSuccess { logEvaluation(key, "JSON", resolved, true) }
+            .onFailure { error -> EngageLogger.warn("Flags", "JSON decode failed key=$key; using default", error) }
+            .getOrDefault(default)
     }
 
     private fun resolve(key: String, expectedType: String): ResolvedFlag? {
         require(FLAG_KEY.matches(key)) { "Flag keys must match ${FLAG_KEY.pattern}" }
         if (sessions.privacy.value != PrivacyState.OPTED_IN || SdkFeature.FEATURE_FLAGS !in features.value) {
+            EngageLogger.debug("Flags", "resolution unavailable key=$key reason=disabled_or_opted_out")
             return null
         }
-        val session = sessions.session.value ?: return null
+        val session = sessions.session.value ?: run {
+            EngageLogger.debug("Flags", "resolution unavailable key=$key reason=no_installation")
+            return null
+        }
         val stored = syncStore.snapshot.value
-        if (stored.generation != session.generation) return null
+        if (stored.generation != session.generation) {
+            EngageLogger.debug(
+                "Flags",
+                "resolution unavailable key=$key reason=stale_generation stored=${stored.generation} " +
+                    "active=${session.generation}",
+            )
+            return null
+        }
         val snapshot = stored.documents.firstOrNull {
             it.module == SdkModule.FEATURE_FLAGS && it.key == "snapshot"
         }?.payload ?: return null
         val flag = snapshot["flags"]?.jsonObject?.get(key)?.jsonObject ?: return null
         val type = (flag["type"] as? JsonPrimitive)?.contentOrNull ?: return null
-        if (type != expectedType) return null
+        if (type != expectedType) {
+            EngageLogger.warn("Flags", "type mismatch key=$key expected=$expectedType actual=$type; using default")
+            return null
+        }
         val value = flag["value"] ?: return null
         val resolved = ResolvedFlag(
             value = value,
@@ -89,7 +120,14 @@ internal class DefaultFeatureFlags(
                 variantKey,
             ).joinToString("\u0000"),
         )
-        if (exposures.contains(exposureId)) return
+        if (exposures.contains(exposureId)) {
+            EngageLogger.verbose("Flags", "exposure deduplicated key=$key id=$exposureId")
+            return
+        }
+        EngageLogger.debug(
+            "Flags",
+            "exposure enqueue key=$key id=$exposureId revision=${flag.revision} variantKey=$variantKey",
+        )
         scope.launch {
             val queued = coordinator.enqueue(
                 type = OperationType.FLAG_EXPOSED,
@@ -102,7 +140,16 @@ internal class DefaultFeatureFlags(
                 },
             )
             if (queued) exposures.mark(exposureId)
+            EngageLogger.debug("Flags", "exposure enqueue result key=$key id=$exposureId accepted=$queued")
         }
+    }
+
+    private fun logEvaluation(key: String, type: String, flag: ResolvedFlag?, resolved: Boolean) {
+        EngageLogger.info(
+            "Flags",
+            "evaluated key=$key type=$type source=${if (resolved) "REMOTE" else "DEFAULT"} " +
+                "revision=${flag?.revision} variantKey=${flag?.variantKey}",
+        )
     }
 
     private data class ResolvedFlag(

@@ -16,10 +16,12 @@ public class SdkFeatureEditor internal constructor(enabled: Set<SdkFeature>) {
 
     public fun enable(feature: SdkFeature) {
         edited += feature
+        EngageLogger.verbose("Features", "enable requested feature=${feature.name}")
     }
 
     public fun disable(feature: SdkFeature) {
         edited -= feature
+        EngageLogger.verbose("Features", "disable requested feature=${feature.name}")
     }
 
     internal fun build(): Set<SdkFeature> = edited.toSet()
@@ -30,4 +32,3 @@ public interface SdkFeatures {
 
     fun edit(block: SdkFeatureEditor.() -> Unit)
 }
-

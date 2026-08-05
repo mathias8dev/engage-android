@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import io.engage.sdk.core.domain.OperationOutbox
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.core.domain.OperationResult
 import io.engage.sdk.core.domain.OperationType
 import io.engage.sdk.core.domain.ReservedOperationBatch
@@ -30,6 +31,7 @@ internal class SqliteOperationOutbox(
     override val pending: StateFlow<List<SdkOperation>> get() = pendingState.value
 
     override fun onCreate(db: SQLiteDatabase) {
+        EngageLogger.info("Outbox", "creating operations database")
         db.execSQL(
             """
             CREATE TABLE operations (
@@ -68,6 +70,11 @@ internal class SqliteOperationOutbox(
             }
         }
         publishPending()
+        EngageLogger.verbose(
+            "Outbox",
+            "operation persisted operationId=${operation.operationId} type=${operation.type.name} " +
+                "generation=${operation.generation} inserted=${rowId != -1L}",
+        )
     }
 
     override suspend fun reserve(
@@ -109,7 +116,10 @@ internal class SqliteOperationOutbox(
             }
             val operations = readBatch(database, batchId, allowedTypes)
             database.setTransactionSuccessful()
-            operations.takeIf(List<SdkOperation>::isNotEmpty)?.let { ReservedOperationBatch(batchId, it) }
+            operations.takeIf(List<SdkOperation>::isNotEmpty)?.let {
+                EngageLogger.verbose("Outbox", "batch persisted batchId=$batchId count=${it.size}")
+                ReservedOperationBatch(batchId, it)
+            }
         } finally {
             database.endTransaction()
         }
@@ -134,6 +144,10 @@ internal class SqliteOperationOutbox(
             )
             database.setTransactionSuccessful()
             publishPending(database)
+            EngageLogger.verbose(
+                "Outbox",
+                "batch settlement persisted batchId=$batchId resultCount=${results.size} settled=$settled",
+            )
             settled > 0
         } finally {
             database.endTransaction()
@@ -141,8 +155,9 @@ internal class SqliteOperationOutbox(
     }
 
     override suspend fun clear(): Unit = io {
-        writableDatabase.delete("operations", null, null)
+        val deleted = writableDatabase.delete("operations", null, null)
         publishPending()
+        EngageLogger.warn("Outbox", "operations cleared count=$deleted")
     }
 
     private fun readBatch(
@@ -217,7 +232,10 @@ internal class SqliteOperationOutbox(
     }
 
     private fun publishPending(database: SQLiteDatabase = readableDatabase) {
-        if (pendingState.isInitialized()) pendingState.value.value = readAll(database)
+        if (pendingState.isInitialized()) {
+            pendingState.value.value = readAll(database)
+            EngageLogger.verbose("Outbox", "pending state published count=${pendingState.value.value.size}")
+        }
     }
 
     private suspend fun <T> io(block: () -> T): T = mutex.withLock {

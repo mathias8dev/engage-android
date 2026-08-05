@@ -20,6 +20,7 @@ import io.engage.sdk.core.domain.SyncRequest
 import io.engage.sdk.core.domain.SyncResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -77,6 +78,38 @@ class OperationCoordinatorTest {
 
         assertTrue(outbox.operations.isEmpty())
         assertEquals("batch-1", api.sent.single().batchId)
+    }
+
+    @Test
+    fun `public mutation returns only after durable outbox persistence`() = runTest {
+        val persistenceGate = CompletableDeferred<Unit>()
+        outbox.beforePersist = { persistenceGate.await() }
+        val mutation = async {
+            DefaultProfile(coordinator).editTags { add("vip") }
+        }
+
+        runCurrent()
+
+        assertFalse(mutation.isCompleted)
+        assertTrue(outbox.operations.isEmpty())
+
+        persistenceGate.complete(Unit)
+        mutation.await()
+
+        assertEquals(OperationType.PROFILE_TAGS_EDITED, outbox.operations.single().type)
+    }
+
+    @Test
+    fun `public mutation propagates durable outbox failure`() = runTest {
+        val expected = IllegalStateException("disk unavailable")
+        outbox.enqueueFailure = expected
+
+        val actual = runCatching {
+            DefaultProfile(coordinator).editTags { add("vip") }
+        }.exceptionOrNull()
+
+        assertEquals(expected, actual)
+        assertTrue(outbox.operations.isEmpty())
     }
 
     @Test
@@ -226,8 +259,12 @@ class OperationCoordinatorTest {
         val operations = mutableListOf<SdkOperation>()
         override val pending = MutableStateFlow<List<SdkOperation>>(emptyList())
         private var reserved: ReservedOperationBatch? = null
+        var beforePersist: suspend () -> Unit = {}
+        var enqueueFailure: Throwable? = null
 
         override suspend fun enqueue(operation: SdkOperation) {
+            beforePersist()
+            enqueueFailure?.let { throw it }
             operations += operation
             pending.value = operations.toList()
         }

@@ -4,6 +4,11 @@ import io.engage.sdk.core.domain.BootstrapRequest
 import io.engage.sdk.core.domain.AuthorizedMethod
 import io.engage.sdk.core.domain.AuthorizedRequest
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -11,8 +16,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 class OkHttpMobileEdgeApiTest {
     private lateinit var server: MockWebServer
@@ -52,6 +55,7 @@ class OkHttpMobileEdgeApiTest {
             endpoint = server.url("/v1/").toUri(),
             appKey = "eng_app_android",
             request = BootstrapRequest(
+                platform = "ANDROID",
                 locale = "fr-FR",
                 timezone = "Europe/Paris",
                 sdkVersion = "1.0.0",
@@ -63,6 +67,10 @@ class OkHttpMobileEdgeApiTest {
         val request = server.takeRequest()
         assertEquals("/v1/sdk/installations", request.path)
         assertEquals("eng_app_android", request.getHeader("X-Engage-App-Key"))
+        assertEquals(
+            "ANDROID",
+            Json.parseToJsonElement(request.body.readUtf8()).jsonObject["platform"]?.jsonPrimitive?.content,
+        )
     }
 
     @Test

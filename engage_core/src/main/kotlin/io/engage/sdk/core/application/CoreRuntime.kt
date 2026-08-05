@@ -11,6 +11,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import io.engage.sdk.Actions
 import io.engage.sdk.EngageConfig
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.Events
 import io.engage.sdk.FeatureFlags
 import io.engage.sdk.Installation
@@ -50,6 +51,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -58,6 +60,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import java.time.ZoneId
+import java.util.UUID
 import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArraySet
@@ -103,8 +106,8 @@ internal class CoreRuntime(
     private lateinit var connectivityMonitor: ConnectivityMonitor
 
     val installation: Installation = DefaultInstallation(sessions, operationCoordinator, scope)
-    val profile: Profile = DefaultProfile(operationCoordinator, scope)
-    val eventsDelegate = DefaultEvents(operationCoordinator, features.enabled, sessions.privacy, mutableSignals, scope)
+    val profile: Profile = DefaultProfile(operationCoordinator)
+    val eventsDelegate = DefaultEvents(operationCoordinator, features.enabled, sessions.privacy, mutableSignals)
     val events: Events = eventsDelegate
     val actions: Actions = actionsDelegate
     val sdkFeatures: SdkFeatures = features
@@ -150,11 +153,31 @@ internal class CoreRuntime(
     override val signals = mutableSignals
 
     init {
+        EngageLogger.info(
+            "Core",
+            "runtime initializing privacy=${privacy.value} installationId=${installationId.value} " +
+                "generation=${generation.value} enabledFeatures=${enabledFeatures.value.sortedBy { it.name }}",
+        )
         connectivityMonitor = ConnectivityMonitor(applicationContext, refreshScheduler::requestImmediate)
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
         privacyDelegate.replayPendingRevocation()
         scope.launch {
+            installationId.collect { id ->
+                if (id == null) {
+                    EngageLogger.info("Installation", "installationId unavailable")
+                } else {
+                    EngageLogger.info("Installation", "installationId=$id generation=${generation.value}")
+                }
+            }
+        }
+        scope.launch {
+            generation.collect { value ->
+                EngageLogger.info("Installation", "generation=$value installationId=${installationId.value}")
+            }
+        }
+        scope.launch {
             features.enabled.drop(1).collect { enabled ->
+                EngageLogger.info("Features", "state changed enabled=${enabled.sortedBy { it.name }}")
                 if (SdkFeature.IN_APP !in enabled && SdkFeature.ANALYTICS !in enabled) {
                     eventsDelegate.resetScreenContext()
                 }
@@ -163,6 +186,7 @@ internal class CoreRuntime(
         }
         scope.launch {
             privacy.drop(1).collect { state ->
+                EngageLogger.info("Privacy", "state changed state=$state")
                 if (state == PrivacyState.OPTED_IN) {
                     refreshScheduler.requestImmediate()
                 } else {
@@ -175,6 +199,7 @@ internal class CoreRuntime(
         if (privacy.value == PrivacyState.OPTED_IN) {
             refreshScheduler.requestImmediate()
         } else {
+            EngageLogger.info("Privacy", "startup is opted out; scheduling durable OPTED_OUT marker")
             scope.launch {
                 runCatching {
                     operationCoordinator.enqueue(
@@ -183,6 +208,8 @@ internal class CoreRuntime(
                         allowWhileOptedOut = true,
                     )
                     operationCoordinator.flush()
+                }.onFailure { error ->
+                    EngageLogger.warn("Privacy", "startup OPTED_OUT marker could not be flushed", error)
                 }
             }
         }
@@ -190,11 +217,19 @@ internal class CoreRuntime(
 
     @Synchronized
     fun startModule(module: EngageModule) {
-        if (!startedModules.add(module.id)) return
+        if (!startedModules.add(module.id)) {
+            EngageLogger.verbose("Core", "module start ignored id=${module.id} reason=already_started")
+            return
+        }
         moduleInstances += module
         features.addAvailable(module.features)
         syncModules += module.syncModules.map { it.toInternal() }
         module.start(this)
+        EngageLogger.info(
+            "Core",
+            "module started id=${module.id} features=${module.features.sortedBy { it.name }} " +
+                "syncModules=${module.syncModules.sortedBy { it.name }}",
+        )
         refreshScheduler.requestImmediate()
     }
 
@@ -207,27 +242,60 @@ internal class CoreRuntime(
                     EngageRemoteDocument(document.key, document.revision, document.payload)
                 }
             }
+        }.onEach { documents ->
+            EngageLogger.verbose(
+                "Sync",
+                "documents emitted module=${module.name} count=${documents.size} generation=${generation.value}",
+            )
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     override suspend fun enqueue(operation: EngageModuleOperation): Boolean {
         val (type, payload) = operation.toWire()
-        return operationCoordinator.enqueue(type, payload)
+        val operationId = (operation as? EngageModuleOperation.PushReceipt)?.let { receipt ->
+            UUID.nameUUIDFromBytes(
+                "engage:push-receipt:${receipt.deliveryId}:${receipt.type.name}".toByteArray(),
+            ).toString()
+        }
+        EngageLogger.verbose("Core", "module operation received type=${operation::class.simpleName}")
+        return if (operationId == null) {
+            operationCoordinator.enqueue(type, payload)
+        } else {
+            operationCoordinator.enqueue(type, payload, operationId = operationId)
+        }.also { accepted ->
+            EngageLogger.debug("Core", "module operation type=${type.name} accepted=$accepted")
+        }
     }
 
     override suspend fun refresh() = refreshMutex.withLock {
-        if (privacy.value != PrivacyState.OPTED_IN) return
+        if (privacy.value != PrivacyState.OPTED_IN) {
+            EngageLogger.debug("Sync", "refresh skipped reason=privacy_opted_out")
+            return
+        }
+        EngageLogger.info("Sync", "refresh started")
         operationCoordinator.ensureInstallation()
         val enabled = enabledFeatures.value
         val modules = syncModules.filterTo(mutableSetOf()) { it.requiredFeature() in enabled }
         val remote = syncCoordinator.reconcile()
         operationCoordinator.flush()
         syncCoordinator.synchronize(modules, remote)
+        EngageLogger.info(
+            "Sync",
+            "refresh finished installationId=${installationId.value} generation=${generation.value} " +
+                "modules=${modules.sortedBy { it.name }}",
+        )
     }
 
     override suspend fun executeAction(name: String, arguments: kotlinx.serialization.json.JsonObject): Boolean =
-        actionsDelegate.execute(name, arguments)
+        actionsDelegate.execute(name, arguments).also { completed ->
+            EngageLogger.debug("Core", "module action name=$name completed=$completed")
+        }
 
     override suspend fun authorizedRequest(request: EngageHttpRequest): EngageHttpResponse {
+        EngageLogger.debug(
+            "HTTP",
+            "module request method=${request.method} path=${request.path} queryKeys=${request.query.keys.sorted()} " +
+                "bodyKeys=${request.body?.keys?.sorted().orEmpty()}",
+        )
         require(!request.path.startsWith('/') && !request.path.contains("://") && request.path.startsWith("sdk/")) {
             "Optional Engage modules may only call relative sdk/ paths"
         }
@@ -246,10 +314,16 @@ internal class CoreRuntime(
                 body = request.body,
             ),
         )
-        return EngageHttpResponse(response.statusCode, response.body)
+        return EngageHttpResponse(response.statusCode, response.body).also {
+            EngageLogger.debug("HTTP", "module response path=${request.path} status=${response.statusCode}")
+        }
     }
 
     private fun startBindingPoll(initialGeneration: Long, expiresAt: String) {
+        EngageLogger.info(
+            "Installation",
+            "binding poll started initialGeneration=$initialGeneration expiresAt=$expiresAt",
+        )
         bindingPollJob?.cancel()
         val expiration = runCatching { Instant.parse(expiresAt) }.getOrNull()
             ?: Instant.now().plusSeconds(BINDING_CODE_FALLBACK_TTL_SECONDS)
@@ -260,13 +334,21 @@ internal class CoreRuntime(
                 Instant.now().isBefore(expiration)
             ) {
                 delay(BINDING_POLL_INTERVAL_MILLIS)
-                runCatching { refresh() }
+                EngageLogger.verbose("Installation", "binding poll tick initialGeneration=$initialGeneration")
+                runCatching { refresh() }.onFailure { error ->
+                    EngageLogger.warn("Installation", "binding poll refresh failed", error)
+                }
             }
             bindingPollJob = null
+            EngageLogger.info(
+                "Installation",
+                "binding poll stopped initialGeneration=$initialGeneration activeGeneration=${generation.value}",
+            )
         }
     }
 
     override fun onStart(owner: LifecycleOwner) {
+        EngageLogger.info("Lifecycle", "application entered foreground")
         eventsDelegate.onForeground()
         if (privacy.value == PrivacyState.OPTED_IN) mutableSignals.tryEmit(EngageSignal.AppOpened)
         refreshScheduler.setForeground(true)
@@ -274,6 +356,7 @@ internal class CoreRuntime(
     }
 
     override fun onStop(owner: LifecycleOwner) {
+        EngageLogger.info("Lifecycle", "application entered background")
         eventsDelegate.onBackground()
         if (privacy.value == PrivacyState.OPTED_IN) mutableSignals.tryEmit(EngageSignal.AppBackgrounded)
         refreshScheduler.setForeground(false)
@@ -345,7 +428,10 @@ private fun SdkModule.requiredFeature(): SdkFeature = when (this) {
 
 private class ConnectivityMonitor(context: Context, notifyAvailable: () -> Unit) {
     private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = notifyAvailable()
+        override fun onAvailable(network: Network) {
+            EngageLogger.debug("Connectivity", "network became available")
+            notifyAvailable()
+        }
     }
 
     init {
@@ -356,6 +442,10 @@ private class ConnectivityMonitor(context: Context, notifyAvailable: () -> Unit)
             } else {
                 manager.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
             }
+        }.onSuccess {
+            EngageLogger.debug("Connectivity", "network callback registered")
+        }.onFailure { error ->
+            EngageLogger.warn("Connectivity", "network callback registration failed", error)
         }
     }
 }

@@ -18,7 +18,7 @@ internal data class InstallationSession(
 
 @Serializable
 internal data class BootstrapRequest(
-    val platform: String = "ANDROID",
+    val platform: String,
     val locale: String,
     val timezone: String,
     val sdkVersion: String,

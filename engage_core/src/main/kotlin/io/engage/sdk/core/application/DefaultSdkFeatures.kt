@@ -4,6 +4,7 @@ import android.content.Context
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.SdkFeatureEditor
 import io.engage.sdk.SdkFeatures
+import io.engage.sdk.EngageLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -25,6 +26,10 @@ internal class DefaultSdkFeatures(context: Context) : SdkFeatures {
             "Could not persist Engage feature settings"
         }
         mutableEnabled.value = next
+        EngageLogger.info(
+            "Features",
+            "enabled=${next.sortedBy { it.name }} disabled=${disabled.sorted()}",
+        )
     }
 
     fun addAvailable(features: Set<SdkFeature>) {
@@ -32,6 +37,7 @@ internal class DefaultSdkFeatures(context: Context) : SdkFeatures {
         if (additions.isEmpty()) return
         available += additions
         mutableEnabled.value = available - disabled
+        EngageLogger.debug("Features", "available modules added=${additions.sortedBy { it.name }}")
     }
 
     private companion object {
@@ -44,4 +50,3 @@ internal class DefaultSdkFeatures(context: Context) : SdkFeatures {
         )
     }
 }
-

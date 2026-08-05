@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import io.engage.sdk.core.domain.SdkModule
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.core.domain.StoredSyncSnapshot
 import io.engage.sdk.core.domain.SyncDocument
 import io.engage.sdk.core.domain.SyncResponse
@@ -26,6 +27,7 @@ internal class SqliteSyncStore(context: Context) : SQLiteOpenHelper(context, DAT
     override val snapshot: StateFlow<StoredSyncSnapshot> get() = mutableSnapshot
 
     override fun onCreate(db: SQLiteDatabase) {
+        EngageLogger.info("SyncStore", "creating synchronization database")
         db.execSQL(
             """
             CREATE TABLE sync_metadata (
@@ -53,6 +55,12 @@ internal class SqliteSyncStore(context: Context) : SQLiteOpenHelper(context, DAT
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
 
     override suspend fun apply(requestedModules: Set<SdkModule>, response: SyncResponse): Unit = io {
+        EngageLogger.debug(
+            "SyncStore",
+            "applying generation=${response.generation} revision=${response.revision} " +
+                "requestedModules=${requestedModules.sortedBy { it.name }} documents=${response.documents.size} " +
+                "tombstones=${response.tombstones.size} fullSnapshot=${response.fullSnapshot}",
+        )
         val database = writableDatabase
         database.beginTransaction()
         try {
@@ -102,6 +110,11 @@ internal class SqliteSyncStore(context: Context) : SQLiteOpenHelper(context, DAT
             database.endTransaction()
         }
         mutableSnapshot.value = readSnapshot(database)
+        EngageLogger.info(
+            "SyncStore",
+            "snapshot applied generation=${mutableSnapshot.value.generation} revision=${mutableSnapshot.value.revision} " +
+                "documents=${mutableSnapshot.value.documents.size}",
+        )
     }
 
     override suspend fun clear(): Unit = io {
@@ -115,6 +128,7 @@ internal class SqliteSyncStore(context: Context) : SQLiteOpenHelper(context, DAT
             database.endTransaction()
         }
         mutableSnapshot.value = StoredSyncSnapshot()
+        EngageLogger.warn("SyncStore", "synchronized snapshot cleared")
     }
 
     private fun readSnapshot(database: SQLiteDatabase): StoredSyncSnapshot {
@@ -163,4 +177,3 @@ internal class SqliteSyncStore(context: Context) : SQLiteOpenHelper(context, DAT
         const val VERSION = 1
     }
 }
-

@@ -22,6 +22,7 @@ public class AttributeEditor internal constructor() {
         validateAttributeKey(key)
         values.remove(key)
         removals += key
+        EngageLogger.verbose("Attributes", "remove key=$key")
     }
 
     internal fun build(): AttributeChanges = AttributeChanges(values.toMap(), removals.toSet())
@@ -30,6 +31,7 @@ public class AttributeEditor internal constructor() {
         validateAttributeKey(key)
         removals.remove(key)
         values[key] = value
+        EngageLogger.verbose("Attributes", "set key=$key type=${value::class.simpleName}")
     }
 }
 
@@ -47,4 +49,3 @@ internal fun validateAttributeKey(key: String) {
 }
 
 private val ATTRIBUTE_KEY = Regex("^[a-z][a-z0-9_.-]{0,127}$")
-

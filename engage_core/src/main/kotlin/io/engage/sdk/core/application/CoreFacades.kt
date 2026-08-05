@@ -5,6 +5,7 @@ import io.engage.sdk.AttributeEditor
 import io.engage.sdk.Events
 import io.engage.sdk.Installation
 import io.engage.sdk.InstallationSubscriptionEditor
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.Profile
 import io.engage.sdk.ProfileSubscriptionEditor
 import io.engage.sdk.PrivacyState
@@ -19,7 +20,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -36,100 +36,123 @@ internal class DefaultInstallation(
         .map { it?.installationId }
         .stateIn(scope, SharingStarted.Eagerly, sessions.session.value?.installationId)
 
-    override suspend fun issueBindingCode(): String = coordinator.issueBindingCode()
-
-    override fun editAttributes(block: AttributeEditor.() -> Unit) {
-        val changes = AttributeEditor().apply(block).build()
-        if (changes.isEmpty) return
-        scope.launch {
-            coordinator.enqueue(
-                OperationType.INSTALLATION_ATTRIBUTES_EDITED,
-                buildJsonObject {
-                    put("set", JsonObject(changes.values))
-                    put("remove", changes.removals.asJsonArray())
-                },
-            )
+    override suspend fun issueBindingCode(): String {
+        EngageLogger.info("Installation", "binding code requested")
+        return coordinator.issueBindingCode().also {
+            EngageLogger.info("Installation", "binding code issued length=${it.length}")
         }
     }
 
-    override fun editSubscriptions(block: InstallationSubscriptionEditor.() -> Unit) {
-        val changes = InstallationSubscriptionEditor().apply(block).build()
-        if (changes.isEmpty()) return
-        scope.launch {
-            coordinator.enqueue(
-                OperationType.INSTALLATION_SUBSCRIPTIONS_EDITED,
-                buildJsonObject {
-                    put(
-                        "changes",
-                        buildJsonArray {
-                            changes.forEach { change ->
-                                add(buildJsonObject {
-                                    put("list", change.list)
-                                    put("subscribed", change.subscribed)
-                                })
-                            }
-                        },
-                    )
-                },
-            )
+    override suspend fun editAttributes(block: AttributeEditor.() -> Unit) {
+        val changes = AttributeEditor().apply(block).build()
+        if (changes.isEmpty) {
+            EngageLogger.debug("Installation", "attribute edit ignored because it is empty")
+            return
         }
+        EngageLogger.debug(
+            "Installation",
+            "attribute edit setKeys=${changes.values.keys.sorted()} removeKeys=${changes.removals.sorted()}",
+        )
+        coordinator.enqueue(
+            OperationType.INSTALLATION_ATTRIBUTES_EDITED,
+            buildJsonObject {
+                put("set", JsonObject(changes.values))
+                put("remove", changes.removals.asJsonArray())
+            },
+        )
+    }
+
+    override suspend fun editSubscriptions(block: InstallationSubscriptionEditor.() -> Unit) {
+        val changes = InstallationSubscriptionEditor().apply(block).build()
+        if (changes.isEmpty()) {
+            EngageLogger.debug("Installation", "subscription edit ignored because it is empty")
+            return
+        }
+        EngageLogger.debug("Installation", "subscription edit count=${changes.size}")
+        coordinator.enqueue(
+            OperationType.INSTALLATION_SUBSCRIPTIONS_EDITED,
+            buildJsonObject {
+                put(
+                    "changes",
+                    buildJsonArray {
+                        changes.forEach { change ->
+                            add(buildJsonObject {
+                                put("list", change.list)
+                                put("subscribed", change.subscribed)
+                            })
+                        }
+                    },
+                )
+            },
+        )
     }
 }
 
 internal class DefaultProfile(
     private val coordinator: OperationCoordinator,
-    private val scope: CoroutineScope,
 ) : Profile {
-    override fun editAttributes(block: AttributeEditor.() -> Unit) {
+    override suspend fun editAttributes(block: AttributeEditor.() -> Unit) {
         val changes = AttributeEditor().apply(block).build()
-        if (changes.isEmpty) return
-        scope.launch {
-            coordinator.enqueue(
-                OperationType.PROFILE_ATTRIBUTES_EDITED,
-                buildJsonObject {
-                    put("set", JsonObject(changes.values))
-                    put("remove", changes.removals.asJsonArray())
-                },
-            )
+        if (changes.isEmpty) {
+            EngageLogger.debug("Profile", "attribute edit ignored because it is empty")
+            return
         }
+        EngageLogger.debug(
+            "Profile",
+            "attribute edit setKeys=${changes.values.keys.sorted()} removeKeys=${changes.removals.sorted()}",
+        )
+        coordinator.enqueue(
+            OperationType.PROFILE_ATTRIBUTES_EDITED,
+            buildJsonObject {
+                put("set", JsonObject(changes.values))
+                put("remove", changes.removals.asJsonArray())
+            },
+        )
     }
 
-    override fun editTags(block: TagEditor.() -> Unit) {
+    override suspend fun editTags(block: TagEditor.() -> Unit) {
         val changes = TagEditor().apply(block).build()
-        if (changes.isEmpty) return
-        scope.launch {
-            coordinator.enqueue(
-                OperationType.PROFILE_TAGS_EDITED,
-                buildJsonObject {
-                    put("add", changes.additions.asJsonArray())
-                    put("remove", changes.removals.asJsonArray())
-                },
-            )
+        if (changes.isEmpty) {
+            EngageLogger.debug("Profile", "tag edit ignored because it is empty")
+            return
         }
+        EngageLogger.debug(
+            "Profile",
+            "tag edit additions=${changes.additions.size} removals=${changes.removals.size}",
+        )
+        coordinator.enqueue(
+            OperationType.PROFILE_TAGS_EDITED,
+            buildJsonObject {
+                put("add", changes.additions.asJsonArray())
+                put("remove", changes.removals.asJsonArray())
+            },
+        )
     }
 
-    override fun editSubscriptions(block: ProfileSubscriptionEditor.() -> Unit) {
+    override suspend fun editSubscriptions(block: ProfileSubscriptionEditor.() -> Unit) {
         val changes = ProfileSubscriptionEditor().apply(block).build()
-        if (changes.isEmpty()) return
-        scope.launch {
-            coordinator.enqueue(
-                OperationType.PROFILE_SUBSCRIPTIONS_EDITED,
-                buildJsonObject {
-                    put(
-                        "changes",
-                        buildJsonArray {
-                            changes.forEach { change ->
-                                add(buildJsonObject {
-                                    put("list", change.list)
-                                    put("channel", change.channel.name)
-                                    put("subscribed", change.subscribed)
-                                })
-                            }
-                        },
-                    )
-                },
-            )
+        if (changes.isEmpty()) {
+            EngageLogger.debug("Profile", "subscription edit ignored because it is empty")
+            return
         }
+        EngageLogger.debug("Profile", "subscription edit count=${changes.size}")
+        coordinator.enqueue(
+            OperationType.PROFILE_SUBSCRIPTIONS_EDITED,
+            buildJsonObject {
+                put(
+                    "changes",
+                    buildJsonArray {
+                        changes.forEach { change ->
+                            add(buildJsonObject {
+                                put("list", change.list)
+                                put("channel", change.channel.name)
+                                put("subscribed", change.subscribed)
+                            })
+                        }
+                    },
+                )
+            },
+        )
     }
 }
 
@@ -138,7 +161,6 @@ internal class DefaultEvents(
     private val features: StateFlow<Set<SdkFeature>>,
     private val privacy: StateFlow<PrivacyState>,
     private val signals: MutableSharedFlow<EngageSignal>,
-    private val scope: CoroutineScope,
     private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
 ) : Events {
     private var currentScreen: String? = null
@@ -146,32 +168,44 @@ internal class DefaultEvents(
     private var visibleSince: Long? = null
     private var accumulatedVisibleMillis = 0L
 
-    override fun track(name: String, block: io.engage.sdk.EventEditor.() -> Unit) {
+    override suspend fun track(name: String, block: io.engage.sdk.EventEditor.() -> Unit) {
         io.engage.sdk.validateEventName(name)
         val event = io.engage.sdk.EventEditor().apply(block).build()
-        if (privacy.value != PrivacyState.OPTED_IN) return
+        EngageLogger.debug("Events", "track name=$name propertyKeys=${event.properties.keys.sorted()}")
+        if (privacy.value != PrivacyState.OPTED_IN) {
+            EngageLogger.debug("Events", "track ignored name=$name reason=privacy_opted_out")
+            return
+        }
         val properties = JsonObject(event.properties)
         if (SdkFeature.IN_APP in features.value) {
             signals.tryEmit(EngageSignal.EventOccurred(name, properties))
         }
-        if (SdkFeature.ANALYTICS !in features.value) return
-        scope.launch {
-            coordinator.enqueue(
-                OperationType.EVENT_TRACKED,
-                buildJsonObject {
-                    put("name", name)
-                    put("properties", properties)
-                    event.value?.let { put("value", it) }
-                    event.transactionId?.let { put("transactionId", it) }
-                },
-            )
+        if (SdkFeature.ANALYTICS !in features.value) {
+            EngageLogger.debug("Events", "network tracking skipped name=$name reason=analytics_disabled")
+            return
         }
+        coordinator.enqueue(
+            OperationType.EVENT_TRACKED,
+            buildJsonObject {
+                put("name", name)
+                put("properties", properties)
+                event.value?.let { put("value", it) }
+                event.transactionId?.let { put("transactionId", it) }
+            },
+        )
     }
 
-    override fun trackScreen(screenKey: String) {
+    override suspend fun trackScreen(screenKey: String) {
         io.engage.sdk.validateScreenKey(screenKey)
-        if (!screenCollectionEnabled()) return
-        if (screenKey == currentScreen) return
+        EngageLogger.debug("Events", "trackScreen key=$screenKey")
+        if (!screenCollectionEnabled()) {
+            EngageLogger.debug("Events", "trackScreen ignored key=$screenKey reason=collection_disabled")
+            return
+        }
+        if (screenKey == currentScreen) {
+            EngageLogger.verbose("Events", "trackScreen ignored key=$screenKey reason=already_current")
+            return
+        }
         val now = elapsedRealtime()
         val previousDuration = visibleSince?.let { accumulatedVisibleMillis + (now - it).coerceAtLeast(0) }
         previousScreen = currentScreen
@@ -180,21 +214,26 @@ internal class DefaultEvents(
         accumulatedVisibleMillis = 0
         if (SdkFeature.IN_APP in features.value) signals.tryEmit(EngageSignal.ScreenViewed(screenKey))
         if (SdkFeature.ANALYTICS !in features.value) return
-        scope.launch {
-            coordinator.enqueue(
-                OperationType.SCREEN_VIEWED,
-                buildJsonObject {
-                    put("screenKey", screenKey)
-                    previousScreen?.let { put("previousScreenKey", it) }
-                    previousDuration?.let { put("previousVisibleDurationMillis", it) }
-                },
-            )
-        }
+        coordinator.enqueue(
+            OperationType.SCREEN_VIEWED,
+            buildJsonObject {
+                put("screenKey", screenKey)
+                previousScreen?.let { put("previousScreenKey", it) }
+                previousDuration?.let { put("previousVisibleDurationMillis", it) }
+            },
+        )
     }
 
-    override fun clearScreen() {
-        if (!screenCollectionEnabled()) return
-        val screenKey = currentScreen ?: return
+    override suspend fun clearScreen() {
+        EngageLogger.debug("Events", "clearScreen requested")
+        if (!screenCollectionEnabled()) {
+            EngageLogger.debug("Events", "clearScreen ignored reason=collection_disabled")
+            return
+        }
+        val screenKey = currentScreen ?: run {
+            EngageLogger.verbose("Events", "clearScreen ignored reason=no_current_screen")
+            return
+        }
         val now = elapsedRealtime()
         val visibleDuration = visibleSince?.let { accumulatedVisibleMillis + (now - it).coerceAtLeast(0) }
             ?: accumulatedVisibleMillis
@@ -204,19 +243,18 @@ internal class DefaultEvents(
         accumulatedVisibleMillis = 0
         if (SdkFeature.IN_APP in features.value) signals.tryEmit(EngageSignal.ScreenCleared)
         if (SdkFeature.ANALYTICS in features.value) {
-            scope.launch {
-                coordinator.enqueue(
-                    OperationType.SCREEN_CLEARED,
-                    buildJsonObject {
-                        put("screenKey", screenKey)
-                        put("visibleDurationMillis", visibleDuration)
-                    },
-                )
-            }
+            coordinator.enqueue(
+                OperationType.SCREEN_CLEARED,
+                buildJsonObject {
+                    put("screenKey", screenKey)
+                    put("visibleDurationMillis", visibleDuration)
+                },
+            )
         }
     }
 
     fun onBackground() {
+        EngageLogger.verbose("Events", "screen timer backgrounded current=$currentScreen")
         if (!screenCollectionEnabled()) return
         val since = visibleSince ?: return
         accumulatedVisibleMillis += (elapsedRealtime() - since).coerceAtLeast(0)
@@ -224,11 +262,13 @@ internal class DefaultEvents(
     }
 
     fun onForeground() {
+        EngageLogger.verbose("Events", "screen timer foregrounded current=$currentScreen")
         if (!screenCollectionEnabled()) return
         if (currentScreen != null && visibleSince == null) visibleSince = elapsedRealtime()
     }
 
     fun resetScreenContext() {
+        EngageLogger.debug("Events", "screen context reset")
         currentScreen = null
         previousScreen = null
         visibleSince = null
@@ -239,7 +279,10 @@ internal class DefaultEvents(
         privacy.value == PrivacyState.OPTED_IN &&
             (SdkFeature.IN_APP in features.value || SdkFeature.ANALYTICS in features.value)
 
-    override suspend fun flush() = coordinator.flush()
+    override suspend fun flush() {
+        EngageLogger.info("Events", "flush requested")
+        coordinator.flush()
+    }
 }
 
 private fun Set<String>.asJsonArray(): JsonArray = JsonArray(map(::JsonPrimitive))

@@ -26,6 +26,10 @@ public class ProfileSubscriptionEditor internal constructor() {
         validateSubscriptionKey(list)
         require(channels.isNotEmpty()) { "At least one channel is required" }
         channels.forEach { channel -> changes[list to channel] = subscribed }
+        EngageLogger.verbose(
+            "Subscriptions",
+            "profile list=$list channels=${channels.sortedBy { it.name }} subscribed=$subscribed",
+        )
     }
 }
 
@@ -35,11 +39,13 @@ public class InstallationSubscriptionEditor internal constructor() {
     public fun subscribe(list: String) {
         validateSubscriptionKey(list)
         changes[list] = true
+        EngageLogger.verbose("Subscriptions", "installation list=$list subscribed=true")
     }
 
     public fun unsubscribe(list: String) {
         validateSubscriptionKey(list)
         changes[list] = false
+        EngageLogger.verbose("Subscriptions", "installation list=$list subscribed=false")
     }
 
     internal fun build(): List<InstallationSubscriptionChange> = changes.map { (list, subscribed) ->
@@ -65,4 +71,3 @@ internal fun validateSubscriptionKey(key: String) {
 }
 
 private val SUBSCRIPTION_KEY = Regex("^[a-z][a-z0-9_.-]{0,127}$")
-

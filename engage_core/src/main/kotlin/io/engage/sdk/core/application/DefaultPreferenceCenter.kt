@@ -3,6 +3,7 @@ package io.engage.sdk.core.application
 import android.content.Context
 import android.content.Intent
 import io.engage.sdk.Channel
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.PreferenceCenter
 import io.engage.sdk.PreferenceCenterSnapshot
 import io.engage.sdk.PreferenceSection
@@ -20,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -42,10 +44,14 @@ internal class DefaultPreferenceCenter(
 ) : PreferenceCenter {
     private val flows = ConcurrentHashMap<String, StateFlow<PreferenceCenterSnapshot?>>()
 
-    override fun center(): StateFlow<PreferenceCenterSnapshot?> = flowFor(DEFAULT_CENTER)
+    override fun center(): StateFlow<PreferenceCenterSnapshot?> {
+        EngageLogger.debug("Preferences", "default center requested")
+        return flowFor(DEFAULT_CENTER)
+    }
 
     override fun center(key: String): StateFlow<PreferenceCenterSnapshot?> {
         require(CENTER_KEY.matches(key)) { "Preference center keys must match ${CENTER_KEY.pattern}" }
+        EngageLogger.debug("Preferences", "center requested key=$key")
         return flowFor(key)
     }
 
@@ -57,6 +63,7 @@ internal class DefaultPreferenceCenter(
     }
 
     private fun flowFor(key: String): StateFlow<PreferenceCenterSnapshot?> = flows.getOrPut(key) {
+        EngageLogger.debug("Preferences", "creating synchronized center flow key=$key")
         combine(
             syncStore.snapshot,
             outbox.pending,
@@ -75,10 +82,16 @@ internal class DefaultPreferenceCenter(
                 PreferenceProjection(snapshot, pending, session.generation)
                     .center(key.takeUnless { it == DEFAULT_CENTER })
             }
+        }.onEach { center ->
+            EngageLogger.verbose(
+                "Preferences",
+                "center emitted requestedKey=$key resolvedKey=${center?.key} sections=${center?.sections?.size ?: 0}",
+            )
         }.stateIn(scope, SharingStarted.Eagerly, null)
     }
 
     private fun displayInternal(key: String?) {
+        EngageLogger.info("Preferences", "display requested key=${key ?: "default"}")
         context.startActivity(
             Intent(context, PreferenceCenterActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

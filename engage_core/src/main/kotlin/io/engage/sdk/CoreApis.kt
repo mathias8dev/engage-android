@@ -6,14 +6,14 @@ public interface Installation {
     val id: StateFlow<String?>
 
     suspend fun issueBindingCode(): String
-    fun editAttributes(block: AttributeEditor.() -> Unit)
-    fun editSubscriptions(block: InstallationSubscriptionEditor.() -> Unit)
+    suspend fun editAttributes(block: AttributeEditor.() -> Unit)
+    suspend fun editSubscriptions(block: InstallationSubscriptionEditor.() -> Unit)
 }
 
 public interface Profile {
-    fun editAttributes(block: AttributeEditor.() -> Unit)
-    fun editTags(block: TagEditor.() -> Unit)
-    fun editSubscriptions(block: ProfileSubscriptionEditor.() -> Unit)
+    suspend fun editAttributes(block: AttributeEditor.() -> Unit)
+    suspend fun editTags(block: TagEditor.() -> Unit)
+    suspend fun editSubscriptions(block: ProfileSubscriptionEditor.() -> Unit)
 }
 
 public class TagEditor internal constructor() {
@@ -24,12 +24,14 @@ public class TagEditor internal constructor() {
         validateTag(tag)
         removals.remove(tag)
         additions += tag
+        EngageLogger.verbose("Profile", "tag add requested length=${tag.length}")
     }
 
     public fun remove(tag: String) {
         validateTag(tag)
         additions.remove(tag)
         removals += tag
+        EngageLogger.verbose("Profile", "tag remove requested length=${tag.length}")
     }
 
     internal fun build(): TagChanges = TagChanges(additions.toSet(), removals.toSet())
@@ -40,13 +42,12 @@ internal data class TagChanges(val additions: Set<String>, val removals: Set<Str
 }
 
 public interface Events {
-    fun track(name: String, block: EventEditor.() -> Unit = {})
-    fun trackScreen(screenKey: String)
-    fun clearScreen()
+    suspend fun track(name: String, block: EventEditor.() -> Unit = {})
+    suspend fun trackScreen(screenKey: String)
+    suspend fun clearScreen()
     suspend fun flush()
 }
 
 private fun validateTag(tag: String) {
     require(tag.isNotBlank() && tag.length <= 64) { "Tags must contain between 1 and 64 characters" }
 }
-

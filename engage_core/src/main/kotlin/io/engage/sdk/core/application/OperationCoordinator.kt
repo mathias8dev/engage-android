@@ -1,6 +1,7 @@
 package io.engage.sdk.core.application
 
 import io.engage.sdk.PrivacyState
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.core.domain.DeviceMetadata
 import io.engage.sdk.core.domain.MobileEdgeApi
 import io.engage.sdk.core.domain.OperationBatchRequest
@@ -40,32 +41,61 @@ internal class OperationCoordinator(
     @Volatile private var pendingBinding: PendingBinding? = null
 
     suspend fun ensureInstallation(allowWhileOptedOut: Boolean = false) = bootstrapMutex.withLock {
+        EngageLogger.debug(
+            "Installation",
+            "ensure requested allowWhileOptedOut=$allowWhileOptedOut hasSession=${sessions.session.value != null}",
+        )
         check(installationEnabled) { "Engage installation was wiped; call privacy.optIn() first" }
         check(allowWhileOptedOut || sessions.privacy.value == PrivacyState.OPTED_IN) {
             "Engage is opted out"
         }
-        sessions.session.value ?: api.bootstrap(
-            endpoint = endpoint,
-            appKey = appKey,
-            request = metadata.toBootstrapRequest(sessions.recoveryToken()),
-        ).also { session -> sessions.saveSession(session) }
+        sessions.session.value?.also { session ->
+            EngageLogger.verbose(
+                "Installation",
+                "existing session installationId=${session.installationId} generation=${session.generation}",
+            )
+        } ?: run {
+            val recoveryToken = sessions.recoveryToken()
+            EngageLogger.info("Installation", "bootstrap started recovery=${recoveryToken != null}")
+            api.bootstrap(
+                endpoint = endpoint,
+                appKey = appKey,
+                request = metadata.toBootstrapRequest(recoveryToken),
+            ).also { session ->
+                sessions.saveSession(session)
+                EngageLogger.info(
+                    "Installation",
+                    "bootstrap completed installationId=${session.installationId} generation=${session.generation}",
+                )
+            }
+        }
     }
 
     suspend fun issueBindingCode(): String {
         val session = ensureInstallation()
+        EngageLogger.debug(
+            "Installation",
+            "binding request started installationId=${session.installationId} generation=${session.generation}",
+        )
         val response = api.issueBindingCode(endpoint, session.credential)
         pendingBinding = PendingBinding(session.generation, parseExpiration(response.expiresAt))
         onBindingCodeIssued(session.generation, response.expiresAt)
+        EngageLogger.info(
+            "Installation",
+            "binding request completed generation=${session.generation} expiresAt=${response.expiresAt}",
+        )
         return response.code
     }
 
     suspend fun prepareWipe() = bootstrapMutex.withLock {
+        EngageLogger.warn("Installation", "installation disabled for wipe")
         installationEnabled = false
         sessions.session.value
     }
 
     suspend fun resumeAfterWipe() = bootstrapMutex.withLock {
         installationEnabled = true
+        EngageLogger.info("Installation", "installation enabled after opt-in")
     }
 
     suspend fun enqueue(
@@ -74,22 +104,35 @@ internal class OperationCoordinator(
         allowWhileOptedOut: Boolean = false,
         operationId: String = newId(),
     ): Boolean {
+        EngageLogger.verbose(
+            "Outbox",
+            "enqueue requested operationId=$operationId type=${type.name} payloadKeys=${payload.keys.sorted()} " +
+                "allowWhileOptedOut=$allowWhileOptedOut",
+        )
         awaitBindingIfProfileScoped(type)
         return bootstrapMutex.withLock {
             check(installationEnabled) { "Engage installation was wiped; call privacy.optIn() first" }
-            if (!allowWhileOptedOut && sessions.privacy.value == PrivacyState.OPTED_OUT) return@withLock false
+            if (!allowWhileOptedOut && sessions.privacy.value == PrivacyState.OPTED_OUT) {
+                EngageLogger.debug("Outbox", "enqueue rejected operationId=$operationId reason=privacy_opted_out")
+                return@withLock false
+            }
+            val generation = sessions.session.value?.generation ?: INITIAL_GENERATION
             outbox.enqueue(
                 SdkOperation(
                     operationId = operationId,
                     // Generation zero is the backend's initial anonymous generation. This lets the
                     // durable outbox accept work before the first network bootstrap.
-                    generation = sessions.session.value?.generation ?: INITIAL_GENERATION,
+                    generation = generation,
                     type = type,
                     occurredAt = Instant.now(clock).toString(),
                     payload = payload,
                 ),
             )
             onEnqueued()
+            EngageLogger.debug(
+                "Outbox",
+                "enqueue accepted operationId=$operationId type=${type.name} generation=$generation",
+            )
             true
         }
     }
@@ -97,21 +140,31 @@ internal class OperationCoordinator(
     private suspend fun awaitBindingIfProfileScoped(type: OperationType) {
         if (type !in PROFILE_SCOPED_TYPES) return
         val pending = pendingBinding ?: return
+        EngageLogger.debug(
+            "Installation",
+            "profile operation waiting for binding transition type=${type.name} generation=${pending.initialGeneration}",
+        )
         val remainingMillis = java.time.Duration.between(Instant.now(clock), pending.expiresAt).toMillis()
         if (remainingMillis <= 0) {
             pendingBinding = null
+            EngageLogger.debug("Installation", "binding wait expired type=${type.name}")
             return
         }
         withTimeoutOrNull(remainingMillis) {
             sessions.session.first { session -> session == null || session.generation != pending.initialGeneration }
         }
         if (sessions.session.value?.generation != pending.initialGeneration) pendingBinding = null
+        EngageLogger.debug(
+            "Installation",
+            "binding wait finished type=${type.name} activeGeneration=${sessions.session.value?.generation}",
+        )
     }
 
     private fun parseExpiration(value: String): Instant = runCatching { Instant.parse(value) }.getOrNull()
         ?: Instant.now(clock).plusSeconds(DEFAULT_BINDING_TTL_SECONDS)
 
     suspend fun flush() = flushMutex.withLock {
+        EngageLogger.info("Outbox", "flush started pending=${outbox.pending.value.size}")
         val session = sessions.session.value
             ?: ensureInstallation(allowWhileOptedOut = sessions.privacy.value == PrivacyState.OPTED_OUT)
         while (true) {
@@ -121,6 +174,11 @@ internal class OperationCoordinator(
                 null
             }
             val reserved = outbox.reserve(MAX_BATCH_SIZE, allowedTypes) ?: break
+            EngageLogger.debug(
+                "Outbox",
+                "batch reserved batchId=${reserved.batchId} count=${reserved.operations.size} " +
+                    "types=${reserved.operations.map { it.type.name }.distinct().sorted()}",
+            )
             val response = api.sendOperations(
                 endpoint = endpoint,
                 credential = session.credential,
@@ -133,8 +191,16 @@ internal class OperationCoordinator(
                 returnedOperationIds.size == returnedOperationIds.toSet().size &&
                     returnedOperationIds.toSet() == expectedOperationIds,
             ) { "Mobile edge returned incomplete or duplicate operation results" }
-            if (!outbox.settle(reserved.batchId, response.results)) break
+            if (!outbox.settle(reserved.batchId, response.results)) {
+                EngageLogger.warn("Outbox", "batch settlement made no progress batchId=${reserved.batchId}")
+                break
+            }
+            EngageLogger.info(
+                "Outbox",
+                "batch settled batchId=${reserved.batchId} count=${response.results.size}",
+            )
         }
+        EngageLogger.info("Outbox", "flush finished pending=${outbox.pending.value.size}")
     }
 
     private companion object {

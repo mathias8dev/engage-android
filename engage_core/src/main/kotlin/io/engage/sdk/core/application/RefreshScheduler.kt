@@ -1,5 +1,7 @@
 package io.engage.sdk.core.application
 
+import io.engage.sdk.EngageLogger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -27,7 +29,22 @@ internal class RefreshScheduler(
 
     init {
         scope.launch {
-            for (ignored in requests) runCatching { refresh() }
+            for (ignored in requests) {
+                EngageLogger.verbose("Refresh", "scheduled refresh started")
+                try {
+                    refresh()
+                    EngageLogger.verbose("Refresh", "scheduled refresh finished")
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    // The transport layer owns the detailed stack trace. Keep this boundary log
+                    // concise so one failed refresh does not print the same exception twice.
+                    EngageLogger.warn(
+                        "Refresh",
+                        "scheduled refresh failed errorType=${error.javaClass.name}",
+                    )
+                }
+            }
         }
         scope.launch {
             combine(
@@ -36,6 +53,7 @@ internal class RefreshScheduler(
             ) { active, seconds -> active to seconds.coerceIn(minimumIntervalSeconds, maximumIntervalSeconds) }
                 .collectLatest { (active, seconds) ->
                     if (!active) return@collectLatest
+                    EngageLogger.debug("Refresh", "foreground cadence seconds=$seconds")
                     while (currentCoroutineContext().isActive) {
                         delay(seconds * MILLIS_PER_SECOND)
                         requestImmediate()
@@ -46,6 +64,7 @@ internal class RefreshScheduler(
 
     @Synchronized
     fun requestImmediate() {
+        EngageLogger.verbose("Refresh", "immediate refresh requested")
         mutationJob?.cancel()
         mutationJob = null
         requests.trySend(Unit)
@@ -53,7 +72,11 @@ internal class RefreshScheduler(
 
     @Synchronized
     fun requestAfterMutation() {
-        if (mutationJob?.isActive == true) return
+        if (mutationJob?.isActive == true) {
+            EngageLogger.verbose("Refresh", "mutation refresh already scheduled")
+            return
+        }
+        EngageLogger.verbose("Refresh", "mutation refresh scheduled delayMillis=$mutationDelayMillis")
         mutationJob = scope.launch {
             delay(mutationDelayMillis)
             requests.trySend(Unit)
@@ -62,6 +85,7 @@ internal class RefreshScheduler(
 
     fun setForeground(active: Boolean) {
         foreground.value = active
+        EngageLogger.debug("Refresh", "foreground=$active")
     }
 
     private companion object {

@@ -34,6 +34,11 @@ public object Engage {
      */
     @Synchronized
     public fun start(context: Context, config: EngageConfig) {
+        EngageLogger.configure(config.logLevel)
+        EngageLogger.info(
+            "Core",
+            "start requested endpointHost=${config.endpoint.host ?: "unknown"} package=${context.packageName}",
+        )
         require(config.appKey.startsWith("eng_app_")) {
             "EngageConfig.appKey must start with eng_app_"
         }
@@ -41,6 +46,7 @@ public object Engage {
         val current = lifecycle.value
         if (current is EngageLifecycle.Started) {
             require(current.config == config) { "Engage is already started with another config" }
+            EngageLogger.debug("Core", "start ignored because the equivalent configuration is already active")
             return
         }
 
@@ -51,12 +57,18 @@ public object Engage {
             applicationContext = context.applicationContext,
             config = config,
         )
+        EngageLogger.info("Core", "started modules=${modules.keys.sorted()}")
     }
 
     /** Internal registration hook invoked by optional official module ContentProviders. */
     @JvmStatic
     @Synchronized
     public fun registerModule(module: EngageModule) {
+        EngageLogger.debug(
+            "Core",
+            "module registration id=${module.id} features=${module.features.sortedBy { it.name }} " +
+                "syncModules=${module.syncModules.sortedBy { it.name }}",
+        )
         modules[module.id] = module
         runtime?.startModule(module)
     }
@@ -70,6 +82,7 @@ public data class EngageConfig(
     val appKey: String,
     val endpoint: URI = URI.create("https://api.engage.io/v1/"),
     val push: PushConfig = PushConfig(),
+    val logLevel: EngageLogLevel = EngageLogLevel.INFO,
 )
 
 public sealed interface EngageLifecycle {

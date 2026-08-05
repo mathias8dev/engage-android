@@ -20,12 +20,18 @@ public class EventEditor internal constructor() {
         require(transactionId == null || transactionId!!.length <= 255) {
             "transactionId must contain at most 255 characters"
         }
+        EngageLogger.verbose(
+            "Events",
+            "editor built propertyKeys=${properties.keys.sorted()} hasValue=${value != null} " +
+                "hasTransactionId=${transactionId != null}",
+        )
         return EventData(properties.toMap(), value, transactionId)
     }
 
     private fun putValue(key: String, value: JsonElement) {
         validateAttributeKey(key)
         properties[key] = value
+        EngageLogger.verbose("Events", "property set key=$key type=${value::class.simpleName}")
     }
 }
 
@@ -45,4 +51,3 @@ internal fun validateScreenKey(key: String) {
 
 private val EVENT_NAME = Regex("^[a-z][a-z0-9_]{1,63}$")
 private val SCREEN_KEY = Regex("^[a-z][a-z0-9_.-]{0,127}$")
-

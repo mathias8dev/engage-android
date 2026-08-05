@@ -1,6 +1,7 @@
 package io.engage.sdk.core.data
 
 import android.content.Context
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.core.domain.RevocationEnvelope
 import io.engage.sdk.core.domain.RevocationStore
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +19,9 @@ internal class AndroidRevocationStore(context: Context) : RevocationStore {
             val operationId = preferences.getStringSet(OPERATION_IDS, emptySet()).orEmpty().minOrNull()
                 ?: return@withContext null
             val credential = secrets.get(credentialKey(operationId)) ?: return@withContext null
-            RevocationEnvelope(operationId, credential)
+            RevocationEnvelope(operationId, credential).also {
+                EngageLogger.verbose("Privacy", "pending revocation loaded operationId=$operationId")
+            }
         }
     }
 
@@ -31,6 +34,7 @@ internal class AndroidRevocationStore(context: Context) : RevocationStore {
             check(preferences.edit().putStringSet(OPERATION_IDS, ids).commit()) {
                 "Could not persist revocation operation"
             }
+            EngageLogger.warn("Privacy", "revocation persisted operationId=${envelope.operationId}")
         }
     }
 
@@ -41,6 +45,7 @@ internal class AndroidRevocationStore(context: Context) : RevocationStore {
             check(preferences.edit().putStringSet(OPERATION_IDS, ids).commit()) {
                 "Could not clear revocation operation"
             }
+            EngageLogger.info("Privacy", "revocation cleared operationId=$operationId")
         }
     }
 

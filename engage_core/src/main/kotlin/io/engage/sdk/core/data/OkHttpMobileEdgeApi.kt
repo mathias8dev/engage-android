@@ -1,5 +1,6 @@
 package io.engage.sdk.core.data
 
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.core.domain.BindingCodeResponse
 import io.engage.sdk.core.domain.AuthorizedMethod
 import io.engage.sdk.core.domain.AuthorizedRequest
@@ -104,16 +105,38 @@ internal class OkHttpMobileEdgeApi(
             AuthorizedMethod.GET -> builder.get()
             AuthorizedMethod.POST -> builder.post(request.body?.toString()?.jsonBody() ?: EMPTY_BODY)
         }
-        client.newCall(builder.build()).execute().use { response ->
-            val rawBody = response.body?.string().orEmpty()
-            val parsedBody = rawBody.takeIf(String::isNotBlank)?.let { raw ->
-                try {
-                    json.parseToJsonElement(raw).jsonObject
-                } catch (error: Exception) {
-                    throw IOException("Invalid Engage mobile-edge response", error)
+        val networkRequest = builder.build()
+        val startedAt = System.nanoTime()
+        EngageLogger.debug(
+            "HTTP",
+            "request method=${networkRequest.method} path=${networkRequest.url.encodedPath} " +
+                "queryKeys=${networkRequest.url.queryParameterNames.sorted()}",
+        )
+        try {
+            client.newCall(networkRequest).execute().use { response ->
+                val rawBody = response.body?.string().orEmpty()
+                val parsedBody = rawBody.takeIf(String::isNotBlank)?.let { raw ->
+                    try {
+                        json.parseToJsonElement(raw).jsonObject
+                    } catch (error: Exception) {
+                        throw IOException("Invalid Engage mobile-edge response", error)
+                    }
                 }
+                EngageLogger.info(
+                    "HTTP",
+                    "response method=${networkRequest.method} path=${networkRequest.url.encodedPath} " +
+                        "status=${response.code} durationMillis=${elapsedMillis(startedAt)}",
+                )
+                AuthorizedResponse(response.code, parsedBody)
             }
-            AuthorizedResponse(response.code, parsedBody)
+        } catch (error: Exception) {
+            EngageLogger.error(
+                "HTTP",
+                "request failed method=${networkRequest.method} path=${networkRequest.url.encodedPath} " +
+                    "durationMillis=${elapsedMillis(startedAt)}",
+                error,
+            )
+            throw error
         }
     }
 
@@ -125,25 +148,62 @@ internal class OkHttpMobileEdgeApi(
         request: Request,
         serializer: kotlinx.serialization.KSerializer<T>,
     ): T = withContext(Dispatchers.IO) {
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MobileEdgeException.from(response.code, body, json)
-            try {
-                json.decodeFromString(serializer, body)
-            } catch (error: SerializationException) {
-                throw IOException("Invalid Engage mobile-edge response", error)
+        val startedAt = System.nanoTime()
+        EngageLogger.debug("HTTP", "request method=${request.method} path=${request.url.encodedPath}")
+        try {
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw MobileEdgeException.from(response.code, body, json)
+                try {
+                    json.decodeFromString(serializer, body).also {
+                        EngageLogger.info(
+                            "HTTP",
+                            "response method=${request.method} path=${request.url.encodedPath} " +
+                                "status=${response.code} durationMillis=${elapsedMillis(startedAt)}",
+                        )
+                    }
+                } catch (error: SerializationException) {
+                    throw IOException("Invalid Engage mobile-edge response", error)
+                }
             }
+        } catch (error: Exception) {
+            EngageLogger.error(
+                "HTTP",
+                "request failed method=${request.method} path=${request.url.encodedPath} " +
+                    "durationMillis=${elapsedMillis(startedAt)}",
+                error,
+            )
+            throw error
         }
     }
 
     private suspend fun executeNoContent(request: Request): Unit = withContext(Dispatchers.IO) {
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MobileEdgeException.from(response.code, body, json)
+        val startedAt = System.nanoTime()
+        EngageLogger.debug("HTTP", "request method=${request.method} path=${request.url.encodedPath}")
+        try {
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw MobileEdgeException.from(response.code, body, json)
+                EngageLogger.info(
+                    "HTTP",
+                    "response method=${request.method} path=${request.url.encodedPath} " +
+                        "status=${response.code} durationMillis=${elapsedMillis(startedAt)}",
+                )
+            }
+        } catch (error: Exception) {
+            EngageLogger.error(
+                "HTTP",
+                "request failed method=${request.method} path=${request.url.encodedPath} " +
+                    "durationMillis=${elapsedMillis(startedAt)}",
+                error,
+            )
+            throw error
         }
     }
 
     private fun String.jsonBody() = toRequestBody(JSON_MEDIA_TYPE)
+
+    private fun elapsedMillis(startedAt: Long): Long = (System.nanoTime() - startedAt) / 1_000_000L
 
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()

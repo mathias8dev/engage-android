@@ -6,6 +6,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import io.engage.sdk.PrivacyState
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.core.domain.InstallationSession
 import io.engage.sdk.core.domain.SessionStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,7 +33,19 @@ internal class AndroidSessionStore(context: Context) : SessionStore {
     override val session: StateFlow<InstallationSession?> = mutableSession
     override val privacy: StateFlow<PrivacyState> = mutablePrivacy
 
-    override suspend fun recoveryToken(): String? = mutex.withLock { secrets.get(RECOVERY_TOKEN) }
+    init {
+        EngageLogger.debug(
+            "Storage",
+            "session restored installationId=${mutableSession.value?.installationId} " +
+                "generation=${mutableSession.value?.generation} privacy=${mutablePrivacy.value}",
+        )
+    }
+
+    override suspend fun recoveryToken(): String? = mutex.withLock {
+        secrets.get(RECOVERY_TOKEN).also { token ->
+            EngageLogger.verbose("Storage", "recovery token read present=${token != null}")
+        }
+    }
 
     override suspend fun saveSession(session: InstallationSession): Unit = mutex.withLock {
         check(secrets.put(CREDENTIAL, session.credential)) { "Could not persist installation credential" }
@@ -50,10 +63,16 @@ internal class AndroidSessionStore(context: Context) : SessionStore {
         ) { "Could not persist installation metadata" }
         writePrivacy(session.privacy)
         mutableSession.value = session
+        EngageLogger.info(
+            "Storage",
+            "session saved installationId=${session.installationId} generation=${session.generation} " +
+                "privacy=${session.privacy} pushSubscription=${session.pushSubscription}",
+        )
     }
 
     override suspend fun setPrivacy(state: PrivacyState): Unit = mutex.withLock {
         writePrivacy(state)
+        EngageLogger.info("Storage", "privacy marker saved state=$state")
     }
 
     private fun writePrivacy(state: PrivacyState) {
@@ -70,6 +89,7 @@ internal class AndroidSessionStore(context: Context) : SessionStore {
         secrets.remove(REVOCATION_CREDENTIAL)
         secrets.remove(RECOVERY_TOKEN)
         mutableSession.value = null
+        EngageLogger.warn("Storage", "installation session cleared")
     }
 
     private fun readPrivacy(): PrivacyState = privacyPreferences.getString(PRIVACY, null)
@@ -118,7 +138,9 @@ internal class KeystoreSecretStore(
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
         val encrypted = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))
         val encoded = Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
-        return preferences.edit().putString(key, encoded).commit()
+        return preferences.edit().putString(key, encoded).commit().also { success ->
+            EngageLogger.verbose("Storage", "secret saved key=$key success=$success")
+        }
     }
 
     fun get(key: String): String? = preferences.getString(key, null)?.let { encoded ->
@@ -132,14 +154,19 @@ internal class KeystoreSecretStore(
                 GCMParameterSpec(TAG_BITS, bytes.copyOfRange(0, IV_BYTES)),
             )
             String(cipher.doFinal(bytes.copyOfRange(IV_BYTES, bytes.size)), StandardCharsets.UTF_8)
+        }.onFailure { error ->
+            EngageLogger.warn("Storage", "secret decode failed key=$key", error)
         }.getOrNull()
     }
 
-    fun remove(key: String): Boolean = preferences.edit().remove(key).commit()
+    fun remove(key: String): Boolean = preferences.edit().remove(key).commit().also { success ->
+        EngageLogger.verbose("Storage", "secret removed key=$key success=$success")
+    }
 
     private fun secretKey(): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         (keyStore.getKey(keyAlias, null) as? SecretKey)?.let { return it }
+        EngageLogger.info("Storage", "creating Android Keystore key alias=$keyAlias")
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE).run {
             init(
                 KeyGenParameterSpec.Builder(
