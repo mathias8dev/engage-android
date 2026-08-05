@@ -26,7 +26,11 @@ class EngagePushPayloadTest {
 
     @Test
     fun `ignores notifications not issued by engage`() {
+        assertNull(EngagePushPayload.from(emptyMap()))
+    }
+
+    @Test
+    fun `rejects malformed engage notifications`() {
         assertNull(EngagePushPayload.from(mapOf("engage_message_id" to "message-1")))
     }
 }
-

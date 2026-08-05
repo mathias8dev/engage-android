@@ -2,6 +2,7 @@ package io.engage.sdk.push.fcm
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import io.engage.sdk.EngageLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -15,6 +16,7 @@ internal fun interface PushImageLoader {
 
 internal object HttpPushImageLoader : PushImageLoader {
     override suspend fun load(url: String): Bitmap? = withContext(Dispatchers.IO) {
+        EngageLogger.debug("Push", "rich image download started host=${runCatching { URI.create(url).host }.getOrNull()}")
         runCatching {
             val uri = URI.create(url)
             require(uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true))
@@ -40,10 +42,14 @@ internal object HttpPushImageLoader : PushImageLoader {
                     }
                     output.toByteArray()
                 }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size).also {
+                    EngageLogger.info("Push", "rich image downloaded bytes=${bytes.size} decoded=${it != null}")
+                }
             } finally {
                 connection.disconnect()
             }
+        }.onFailure { error ->
+            EngageLogger.warn("Push", "rich image download failed", error)
         }.getOrNull()
     }
 

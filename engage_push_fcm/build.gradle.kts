@@ -58,10 +58,12 @@ dependencies {
     api("com.github.mathias8dev:engage-android-core:$engageDependencyVersion")
     implementation("com.google.firebase:firebase-messaging:25.1.1")
     implementation("androidx.core:core-ktx:1.17.0")
+    implementation("androidx.work:work-runtime-ktx:2.11.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("androidx.test:core:1.7.0")
+    testImplementation("androidx.work:work-testing:2.11.0")
     testImplementation("org.robolectric:robolectric:4.16.1")
 }
 

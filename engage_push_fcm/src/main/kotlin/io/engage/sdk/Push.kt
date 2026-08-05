@@ -1,5 +1,6 @@
 package io.engage.sdk
 
+import android.content.Intent
 import io.engage.sdk.push.fcm.EngagePushModule
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,6 +48,15 @@ public interface Push {
 
     suspend fun optIn()
     suspend fun optOut()
+
+    /**
+     * Processes a notification launch intent delivered to an existing Activity.
+     *
+     * Standard integrations are wired automatically. Hosts with a custom Activity
+     * or framework bridge can forward `onNewIntent` here. Returns true when the
+     * intent belongs to Engage, including an intent already processed once.
+     */
+    public fun handleOpenIntent(intent: Intent): Boolean
 }
 
 public val Engage.push: Push get() = EngagePushModule.requireApi()

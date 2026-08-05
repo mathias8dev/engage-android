@@ -1,5 +1,7 @@
 package io.engage.sdk.push.fcm
 
+import io.engage.sdk.EngageLogger
+
 internal data class EngagePushPayload(
     val deliveryId: String,
     val messageId: String,
@@ -16,8 +18,18 @@ internal data class EngagePushPayload(
 ) {
     companion object {
         fun from(data: Map<String, String>): EngagePushPayload? {
-            val deliveryId = data[DELIVERY_ID]?.takeIf(String::isNotBlank) ?: return null
-            val messageId = data[MESSAGE_ID]?.takeIf(String::isNotBlank) ?: return null
+            if (data.keys.none { it.startsWith(ENGAGE_KEY_PREFIX) }) {
+                EngageLogger.verbose("Push", "payload ignored reason=not_engage")
+                return null
+            }
+            val deliveryId = data[DELIVERY_ID]?.takeIf(String::isNotBlank) ?: run {
+                EngageLogger.warn("Push", "payload rejected reason=missing_delivery_id keys=${data.keys.sorted()}")
+                return null
+            }
+            val messageId = data[MESSAGE_ID]?.takeIf(String::isNotBlank) ?: run {
+                EngageLogger.warn("Push", "payload rejected reason=missing_message_id deliveryId=$deliveryId")
+                return null
+            }
             return EngagePushPayload(
                 deliveryId = deliveryId,
                 messageId = messageId,
@@ -33,9 +45,16 @@ internal data class EngagePushPayload(
                 categoryKey = data[CATEGORY_KEY],
                 notificationTag = data[NOTIFICATION_TAG],
                 data = data,
-            )
+            ).also { payload ->
+                EngageLogger.debug(
+                    "Push",
+                    "payload parsed deliveryId=$deliveryId messageId=$messageId actionType=${payload.actionType} " +
+                        "customKeys=${payload.customData().keys.sorted()} hasImage=${payload.imageUrl != null}",
+                )
+            }
         }
 
+        private const val ENGAGE_KEY_PREFIX = "engage_"
         private const val DELIVERY_ID = "engage_delivery_id"
         private const val MESSAGE_ID = "engage_message_id"
         private const val ACTION_TYPE = "engage_action_type"

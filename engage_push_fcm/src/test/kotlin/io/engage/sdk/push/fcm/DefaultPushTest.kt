@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import androidx.test.core.app.ApplicationProvider
-import com.google.firebase.messaging.RemoteMessage
 import io.engage.sdk.AndroidPushAction
 import io.engage.sdk.AndroidPushCategory
 import io.engage.sdk.AndroidPushChannel
@@ -129,14 +128,17 @@ class DefaultPushTest {
         val event = async { push.events.first() }
         runCurrent()
 
-        push.onMessage(RemoteMessage.Builder("engage").setData(pushPayload()).build())
-        runCurrent()
+        push.processMessage(pushPayload())
 
         assertEquals(
             PushEvent.Received("delivery-1", "message-1", mapOf("merchant" to "Paris")),
             event.await(),
         )
         assertNotNull(notification?.extras?.getParcelable<Bitmap>(Notification.EXTRA_PICTURE))
+        assertEquals(
+            EngagePushOpenActivity::class.java.name,
+            shadowOf(notification!!.contentIntent).savedIntent.component?.className,
+        )
         clearState(application)
     }
 
@@ -194,6 +196,42 @@ class DefaultPushTest {
         clearState(application)
     }
 
+    @Test
+    fun `opening a web URL launches the browser and does not expose it as an app deep link`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        clearState(application)
+        val context = FakeModuleContext(application, backgroundScope, pushConfig())
+        val push = DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+        )
+        val event = async { push.events.first() }
+        runCurrent()
+        val intent = Intent().apply {
+            pushPayload(actionType = "WEB_URL", actionValue = "https://www.google.com/search?q=engage")
+                .forEach(::putExtra)
+        }
+
+        push.handleOpenIntent(intent)
+        runCurrent()
+
+        assertEquals(
+            PushEvent.Opened(
+                "delivery-1",
+                "message-1",
+                null,
+                mapOf("merchant" to "Paris"),
+            ),
+            event.await(),
+        )
+        val browserIntent = shadowOf(application).nextStartedActivity
+        assertEquals(Intent.ACTION_VIEW, browserIntent.action)
+        assertEquals("https://www.google.com/search?q=engage", browserIntent.dataString)
+        assertTrue(Intent.CATEGORY_BROWSABLE in browserIntent.categories)
+        clearState(application)
+    }
+
     private fun pushConfig() = EngageConfig(
         appKey = "eng_app_test",
         push = PushConfig(
@@ -211,11 +249,15 @@ class DefaultPushTest {
         ),
     )
 
-    private fun pushPayload(actionType: String = "CUSTOM") = mapOf(
+    private fun pushPayload(actionType: String = "CUSTOM", actionValue: String? = null) = mapOf(
         "engage_delivery_id" to "delivery-1",
         "engage_message_id" to "message-1",
         "engage_action_type" to actionType,
-        "engage_action_value" to if (actionType == "CUSTOM") "open_order" else "engage-test://orders/42",
+        "engage_action_value" to (actionValue ?: if (actionType == "CUSTOM") {
+            "open_order"
+        } else {
+            "engage-test://orders/42"
+        }),
         "engage_action_arg_order_id" to "order-42",
         "engage_title" to "Order ready",
         "engage_body" to "Order 42 is ready",
