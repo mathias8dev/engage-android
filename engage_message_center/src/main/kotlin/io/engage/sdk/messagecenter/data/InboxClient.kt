@@ -27,6 +27,7 @@ import java.time.Instant
 
 internal class InboxClient(private val context: EngageModuleContext) {
     suspend fun page(cursor: String?, pageSize: Int): RemoteInboxPage {
+        context.logDebug("MessageCenter.Network", "page request pageSize=$pageSize hasCursor=${cursor != null}")
         val response = context.authorizedRequest(
             EngageHttpRequest(
                 method = EngageHttpMethod.GET,
@@ -57,10 +58,18 @@ internal class InboxClient(private val context: EngageModuleContext) {
                 ?: invalidResponse("Inbox unreadCount is missing"),
         )
         if (page.hasMore && page.nextCursor == null) invalidResponse("Inbox nextCursor is missing")
+        context.logInfo(
+            "MessageCenter.Network",
+            "page received entries=${page.entries.size} hasMore=${page.hasMore} unread=${page.unreadCount}",
+        )
         return page
     }
 
     suspend fun mutate(batch: ReservedMutationBatch): List<MutationResult> {
+        context.logDebug(
+            "MessageCenter.Network",
+            "mutation batch sending batchId=${batch.batchId} generation=${batch.generation} count=${batch.operations.size}",
+        )
         val response = context.authorizedRequest(
             EngageHttpRequest(
                 EngageHttpMethod.POST,
@@ -98,12 +107,22 @@ internal class InboxClient(private val context: EngageModuleContext) {
             returnedIds.size != expectedIds.size ||
             returnedIds.toSet() != expectedIds.toSet()
         ) invalidResponse("Inbox returned incomplete or duplicate mutation results")
+        context.logInfo(
+            "MessageCenter.Network",
+            "mutation batch received batchId=${batch.batchId} " +
+                "accepted=${results.count { it.status != MutationStatus.REJECTED }} " +
+                "rejected=${results.count { it.status == MutationStatus.REJECTED }}",
+        )
         return results
     }
 
     suspend fun renderings(entryIds: List<String>): List<InboxRendering> {
-        if (entryIds.isEmpty()) return emptyList()
+        if (entryIds.isEmpty()) {
+            context.logVerbose("MessageCenter.Network", "rendering resolution skipped reason=no_entries")
+            return emptyList()
+        }
         val requestedIds = entryIds.distinct().take(100).toSet()
+        context.logDebug("MessageCenter.Network", "rendering request count=${requestedIds.size}")
         val response = context.authorizedRequest(
             EngageHttpRequest(
                 EngageHttpMethod.POST,
@@ -134,6 +153,10 @@ internal class InboxClient(private val context: EngageModuleContext) {
             invalidResponse("Inbox returned duplicate renderings")
         }
         if (renderings.any { it.revision < 1 }) invalidResponse("Rendering revision must be positive")
+        context.logInfo(
+            "MessageCenter.Network",
+            "renderings received count=${renderings.size} renderers=${renderings.map(InboxRendering::renderer).distinct().sorted()}",
+        )
         return renderings
     }
 }

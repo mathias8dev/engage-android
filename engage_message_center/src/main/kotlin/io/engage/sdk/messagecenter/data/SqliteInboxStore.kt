@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.messagecenter.domain.CachedInboxWindow
 import io.engage.sdk.messagecenter.domain.InboxScope
 import io.engage.sdk.messagecenter.domain.InboxStore
@@ -39,6 +40,7 @@ internal class SqliteInboxStore(
     override val snapshot: StateFlow<InboxStoreSnapshot> = mutableSnapshot.asStateFlow()
 
     override fun onCreate(database: SQLiteDatabase) {
+        EngageLogger.debug("MessageCenter.Store", "database schema creating version=$DATABASE_VERSION")
         database.execSQL(
             """
             CREATE TABLE inbox_entries (
@@ -99,11 +101,13 @@ internal class SqliteInboxStore(
             """.trimIndent(),
         )
         database.execSQL("CREATE INDEX inbox_mutations_generation ON inbox_mutations(generation)")
+        EngageLogger.debug("MessageCenter.Store", "database schema created")
     }
 
     override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
 
     override suspend fun activateGeneration(generation: Long) = mutex.withLock {
+        EngageLogger.debug("MessageCenter.Store", "generation activating generation=$generation")
         writableDatabase.transaction {
             listOf(
                 "inbox_page_entries",
@@ -117,6 +121,7 @@ internal class SqliteInboxStore(
         }
         activeGeneration = generation
         publishLocked(generation)
+        EngageLogger.info("MessageCenter.Store", "generation active generation=$generation")
     }
 
     override suspend fun savePage(
@@ -125,6 +130,11 @@ internal class SqliteInboxStore(
         cursor: String?,
         page: RemoteInboxPage,
     ) = mutex.withLock {
+        EngageLogger.debug(
+            "MessageCenter.Store",
+            "page saving generation=$generation pageSize=$pageSize hasCursor=${cursor != null} " +
+                "entries=${page.entries.size} hasMore=${page.hasMore}",
+        )
         writableDatabase.transaction {
             page.entries.forEach { entry -> upsertEntry(generation, entry) }
             val cursorKey = cursor.orEmpty()
@@ -169,9 +179,11 @@ internal class SqliteInboxStore(
             )
         }
         publishIfActiveLocked(generation)
+        EngageLogger.debug("MessageCenter.Store", "page saved generation=$generation entries=${page.entries.size}")
     }
 
     override suspend fun cachedWindow(generation: Long, pageSize: Int): CachedInboxWindow = mutex.withLock {
+        EngageLogger.verbose("MessageCenter.Store", "cached window reading generation=$generation pageSize=$pageSize")
         val ids = linkedSetOf<String>()
         val visited = mutableSetOf<String>()
         var cursorKey = ""
@@ -204,10 +216,20 @@ internal class SqliteInboxStore(
             if (!hasMore || nextCursor == null) break
             cursorKey = nextCursor
         }
-        CachedInboxWindow(ids.toList(), nextCursor, hasMore)
+        CachedInboxWindow(ids.toList(), nextCursor, hasMore).also {
+            EngageLogger.debug(
+                "MessageCenter.Store",
+                "cached window read generation=$generation entries=${it.entryIds.size} hasMore=${it.hasMore}",
+            )
+        }
     }
 
     override suspend fun enqueue(mutation: PendingMutation) = mutex.withLock {
+        EngageLogger.debug(
+            "MessageCenter.Store",
+            "mutation persisting operationId=${mutation.operationId} generation=${mutation.generation} " +
+                "type=${mutation.type} entryId=${mutation.entryId}",
+        )
         writableDatabase.insertWithOnConflict(
             "inbox_mutations",
             null,
@@ -222,9 +244,11 @@ internal class SqliteInboxStore(
             SQLiteDatabase.CONFLICT_IGNORE,
         )
         publishIfActiveLocked(mutation.generation)
+        EngageLogger.debug("MessageCenter.Store", "mutation persisted operationId=${mutation.operationId}")
     }
 
     override suspend fun reserve(generation: Long, limit: Int): ReservedMutationBatch? = mutex.withLock {
+        EngageLogger.verbose("MessageCenter.Store", "mutation reserve requested generation=$generation limit=$limit")
         writableDatabase.transactionWithResult {
             var batchId = query(
                 "inbox_mutations",
@@ -260,6 +284,11 @@ internal class SqliteInboxStore(
             }
             val operations = readMutations("generation = ? AND batch_id = ?", arrayOf(generation.toString(), batchId))
             ReservedMutationBatch(batchId, generation, operations)
+        }.also { batch ->
+            EngageLogger.debug(
+                "MessageCenter.Store",
+                "mutation reserve result generation=$generation batchId=${batch?.batchId} count=${batch?.operations?.size ?: 0}",
+            )
         }
     }
 
@@ -267,6 +296,10 @@ internal class SqliteInboxStore(
         batch: ReservedMutationBatch,
         results: List<MutationResult>,
     ): List<MutationResult> = mutex.withLock {
+        EngageLogger.debug(
+            "MessageCenter.Store",
+            "mutation batch settling batchId=${batch.batchId} results=${results.size}",
+        )
         val byId = results.associateBy(MutationResult::operationId)
         val rejected = mutableListOf<MutationResult>()
         writableDatabase.transaction {
@@ -281,10 +314,15 @@ internal class SqliteInboxStore(
             }
         }
         publishIfActiveLocked(batch.generation)
+        EngageLogger.info(
+            "MessageCenter.Store",
+            "mutation batch settled batchId=${batch.batchId} rejected=${rejected.size}",
+        )
         rejected
     }
 
     override suspend fun clear() = mutex.withLock {
+        EngageLogger.warn("MessageCenter.Store", "all local inbox data clearing")
         writableDatabase.transaction {
             delete("inbox_page_entries", null, null)
             delete("inbox_page_state", null, null)
@@ -294,6 +332,7 @@ internal class SqliteInboxStore(
         }
         mutableSnapshot.value = InboxStoreSnapshot()
         activeGeneration = null
+        EngageLogger.warn("MessageCenter.Store", "all local inbox data cleared")
     }
 
     private fun SQLiteDatabase.upsertEntry(generation: Long, entry: RemoteInboxEntry) {
@@ -315,6 +354,11 @@ internal class SqliteInboxStore(
     }
 
     private fun SQLiteDatabase.commitMutation(generation: Long, mutation: PendingMutation) {
+        EngageLogger.verbose(
+            "MessageCenter.Store",
+            "mutation committing operationId=${mutation.operationId} generation=$generation type=${mutation.type} " +
+                "entryId=${mutation.entryId}",
+        )
         val unread = queryUnreadCount(generation)
         when (mutation.type) {
             MutationType.MARK_ALL_READ -> {
@@ -398,6 +442,10 @@ internal class SqliteInboxStore(
             }
         }
         mutableSnapshot.value = InboxStoreSnapshot(generation, entries, unreadCount, pending.size)
+        EngageLogger.verbose(
+            "MessageCenter.Store",
+            "snapshot published generation=$generation entries=${entries.size} unread=$unreadCount pending=${pending.size}",
+        )
     }
 
     private fun publishIfActiveLocked(generation: Long) {

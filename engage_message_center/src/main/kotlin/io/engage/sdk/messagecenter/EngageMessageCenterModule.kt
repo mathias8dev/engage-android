@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.net.Uri
 import io.engage.sdk.Engage
+import io.engage.sdk.EngageLogger
 import io.engage.sdk.MessageCenter
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.spi.EngageModule
@@ -17,10 +18,16 @@ internal object EngageMessageCenterModule : EngageModule {
     private var api: MessageCenter? = null
 
     override fun start(context: EngageModuleContext) {
-        if (api == null) api = DefaultMessageCenter(context)
+        if (api == null) {
+            context.logInfo("MessageCenter", "module starting")
+            api = DefaultMessageCenter(context)
+        } else {
+            context.logDebug("MessageCenter", "module start ignored reason=already_started")
+        }
     }
 
     override suspend fun wipe() {
+        EngageLogger.warn("MessageCenter", "module wipe requested")
         (api as? DefaultMessageCenter)?.wipe()
     }
 
@@ -31,6 +38,7 @@ internal object EngageMessageCenterModule : EngageModule {
 
 public class EngageMessageCenterInitProvider : ContentProvider() {
     override fun onCreate(): Boolean {
+        EngageLogger.debug("MessageCenter", "init provider registering module")
         Engage.registerModule(EngageMessageCenterModule)
         return true
     }
