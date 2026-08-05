@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="engage_message_center_header">#0D1714</color>
+    <color name="engage_message_center_header_secondary">#A9BAB5</color>
+    <color name="engage_message_center_page">#101714</color>
+    <color name="engage_message_center_surface">#18221F</color>
+    <color name="engage_message_center_surface_read">#141D1A</color>
+    <color name="engage_message_center_outline">#34423E</color>
+    <color name="engage_message_center_text">#EEF5F2</color>
+    <color name="engage_message_center_text_secondary">#A8B6B1</color>
+    <color name="engage_message_center_accent">#4FD5B7</color>
+    <color name="engage_message_center_accent_soft">#153B32</color>
+    <color name="engage_message_center_on_accent">#06241D</color>
+</resources>

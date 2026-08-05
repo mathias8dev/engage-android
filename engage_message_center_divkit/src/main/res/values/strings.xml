@@ -3,9 +3,20 @@
     <string name="engage_message_center_title">Messages</string>
     <string name="engage_message_center_back">Back</string>
     <string name="engage_message_center_mark_all_read">Mark all read</string>
-    <string name="engage_message_center_empty">No messages yet</string>
-    <string name="engage_message_center_retry">Couldn\'t refresh messages. Pull to retry.</string>
+    <string name="engage_message_center_filter_all">All</string>
+    <string name="engage_message_center_filter_unread">Unread</string>
+    <string name="engage_message_center_empty_title">You\'re all caught up</string>
+    <string name="engage_message_center_empty_body">Important updates and messages will appear here.</string>
+    <string name="engage_message_center_no_unread_title">No unread messages</string>
+    <string name="engage_message_center_no_unread_body">Everything in your inbox has been read.</string>
+    <string name="engage_message_center_refresh">Refresh</string>
+    <string name="engage_message_center_retry_title">Messages unavailable</string>
+    <string name="engage_message_center_retry">We couldn\'t refresh your messages. Try again.</string>
     <string name="engage_message_center_rendering_retry">Some messages couldn\'t be displayed. Pull to retry.</string>
     <string name="engage_message_center_unavailable">This message cannot be displayed.</string>
     <string name="engage_message_center_unread">Unread message</string>
+    <plurals name="engage_message_center_unread_count">
+        <item quantity="one">%d unread</item>
+        <item quantity="other">%d unread</item>
+    </plurals>
 </resources>

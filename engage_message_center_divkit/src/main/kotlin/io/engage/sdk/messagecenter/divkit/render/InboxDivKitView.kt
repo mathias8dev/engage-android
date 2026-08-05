@@ -3,6 +3,7 @@ package io.engage.sdk.messagecenter.divkit.render
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.view.ContextThemeWrapper
 import android.view.Gravity
@@ -10,6 +11,7 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import com.yandex.div.DivDataTag
 import com.yandex.div.coil.CoilDivImageLoader
 import com.yandex.div.core.Div2Context
@@ -49,6 +51,8 @@ internal class InboxDivKitView(
 
     init {
         minimumHeight = dp(72)
+        clipToOutline = true
+        elevation = dp(2).toFloat()
         EngageLogger.verbose("MessageCenter.DivKit", "item view created")
     }
 
@@ -63,6 +67,7 @@ internal class InboxDivKitView(
         divView?.cleanup()
         divView = null
         removeAllViews()
+        background = cardBackground(read = item.entry.readAt != null)
         when (val rendering = item.rendering) {
             null -> addCentered(ProgressBar(context))
             is RenderingResolution.Unavailable -> addCentered(
@@ -166,16 +171,41 @@ internal class InboxDivKitView(
     private fun addUnreadIndicator() {
         addView(
             View(context).apply {
-                setBackgroundColor(resolveThemeColor(android.R.attr.colorAccent, 0xFF666666.toInt()))
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = dp(2).toFloat()
+                    setColor(ContextCompat.getColor(context, R.color.engage_message_center_accent))
+                }
                 contentDescription = context.getString(R.string.engage_message_center_unread)
             },
             LayoutParams(dp(4), LayoutParams.MATCH_PARENT, Gravity.START),
         )
+        addView(
+            View(context).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(ContextCompat.getColor(context, R.color.engage_message_center_accent))
+                }
+                importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+            },
+            LayoutParams(dp(8), dp(8), Gravity.TOP or Gravity.END).apply {
+                topMargin = dp(12)
+                marginEnd = dp(12)
+            },
+        )
     }
 
-    private fun resolveThemeColor(attribute: Int, fallback: Int): Int {
-        val value = android.util.TypedValue()
-        return if (context.theme.resolveAttribute(attribute, value, true)) value.data else fallback
+    private fun cardBackground(read: Boolean) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(20).toFloat()
+        setColor(
+            ContextCompat.getColor(
+                context,
+                if (read) R.color.engage_message_center_surface_read
+                else R.color.engage_message_center_surface,
+            ),
+        )
+        setStroke(dp(1), ContextCompat.getColor(context, R.color.engage_message_center_outline))
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
