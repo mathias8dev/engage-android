@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Declared for Android 13+; Engage never invokes the runtime permission prompt. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+        <provider
+            android:name="io.engage.sdk.push.fcm.EngagePushInitProvider"
+            android:authorities="${applicationId}.engage-push-init"
+            android:exported="false"
+            android:initOrder="90" />
+
+        <service
+            android:name="io.engage.sdk.push.fcm.EngageFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name="io.engage.sdk.push.fcm.EngagePushOpenActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <receiver
+            android:name="io.engage.sdk.push.fcm.EngagePushDismissReceiver"
+            android:exported="false" />
+        <receiver
+            android:name="io.engage.sdk.push.fcm.EngagePushActionReceiver"
+            android:exported="false" />
+    </application>
+</manifest>
