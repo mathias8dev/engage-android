@@ -1,0 +1,19 @@
+[tools]
+java = "temurin-21"
+
+[env]
+ANDROID_HOME = "{{ get_env(name='ANDROID_HOME', default=env.HOME ~ '/Android/Sdk') }}"
+ANDROID_SDK_ROOT = "{{ get_env(name='ANDROID_SDK_ROOT', default=get_env(name='ANDROID_HOME', default=env.HOME ~ '/Android/Sdk')) }}"
+
+[tasks.check]
+description = "Build, test, and verify the Maven publication"
+run = '''
+release_version="$(sed -nE 's/^engageReleaseVersion[[:space:]]*=[[:space:]]*([^[:space:]]+).*$/\1/p' gradle.properties | head -n 1)"
+build_version="$release_version-$(date -u +%y%m%d%H%M)"
+./gradlew clean build publishToMavenLocal -PengageVersion="$build_version"
+'''
+
+[tasks.release]
+description = "Release the version declared by engageReleaseVersion in gradle.properties"
+confirm = "Create and push this Android SDK release tag?"
+run = "./scripts/release.sh"
