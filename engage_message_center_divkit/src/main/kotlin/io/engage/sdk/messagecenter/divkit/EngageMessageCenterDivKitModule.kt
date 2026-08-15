@@ -16,6 +16,7 @@ import io.engage.sdk.messagecenter.divkit.render.EngageMessageCenterActivity
 import io.engage.sdk.spi.EngageModule
 import io.engage.sdk.spi.EngageModuleContext
 import io.engage.sdk.spi.EngageSignal
+import io.engage.sdk.spi.scopedDatabaseName
 import kotlinx.coroutines.launch
 
 internal object EngageMessageCenterDivKitModule : EngageModule {
@@ -47,7 +48,10 @@ internal object EngageMessageCenterDivKitModule : EngageModule {
 
 internal class MessageCenterUiRuntime(private val context: EngageModuleContext) {
     val repository = RenderingRepository(
-        RenderingStore(context.applicationContext),
+        RenderingStore(
+            context.applicationContext,
+            databaseName = context.scopedDatabaseName("engage_message_center_divkit.db"),
+        ),
         context.generation,
         support = { renderingSupport() },
     )

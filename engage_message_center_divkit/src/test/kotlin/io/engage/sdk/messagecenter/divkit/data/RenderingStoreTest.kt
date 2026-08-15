@@ -65,4 +65,26 @@ class RenderingStoreTest {
         assertTrue(store.read(7, listOf(availableId)).isEmpty())
         assertFalse(store.write(7, listOf(RenderingResolution.Unavailable(availableId))))
     }
+
+    @Test
+    fun `application storage scopes cannot read each others renderings`() {
+        val firstName = "engage_message_center_divkit_first.db"
+        val secondName = "engage_message_center_divkit_second.db"
+        val first = RenderingStore(context, databaseName = firstName)
+        val second = RenderingStore(context, databaseName = secondName)
+        val entryId = InboxEntryId("tenant-one")
+        try {
+            first.activateGeneration(7)
+            assertTrue(first.write(7, listOf(RenderingResolution.Unavailable(entryId))))
+            second.activateGeneration(7)
+
+            assertTrue(first.read(7, listOf(entryId)).containsKey(entryId))
+            assertTrue(second.read(7, listOf(entryId)).isEmpty())
+        } finally {
+            first.close()
+            second.close()
+            context.deleteDatabase(firstName)
+            context.deleteDatabase(secondName)
+        }
+    }
 }

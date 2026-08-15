@@ -14,7 +14,8 @@ import kotlinx.serialization.json.jsonObject
 internal class RenderingStore(
     context: Context,
     private val json: Json = Json,
-) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
+    databaseName: String = DATABASE_NAME,
+) : SQLiteOpenHelper(context, databaseName, null, DATABASE_VERSION) {
     private var activeGeneration: Long? = null
 
     override fun onCreate(database: SQLiteDatabase) {

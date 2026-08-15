@@ -2,6 +2,7 @@ package io.engage.sdk.messagecenter.divkit.render
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -18,7 +19,9 @@ import com.yandex.div.core.Div2Context
 import com.yandex.div.core.DivActionHandler
 import com.yandex.div.core.DivConfiguration
 import com.yandex.div.core.DivViewFacade
+import com.yandex.div.core.expression.variables.DivVariableController
 import com.yandex.div.core.view2.Div2View
+import com.yandex.div.data.Variable
 import com.yandex.div.data.DivParsingEnvironment
 import com.yandex.div.json.ParsingErrorLogger
 import com.yandex.div2.DivData
@@ -42,6 +45,7 @@ internal class InboxDivKitView(
     private val actionRouter: InboxActionRouter,
 ) : FrameLayout(context) {
     private var divView: Div2View? = null
+    private var appearanceVariable: Variable.StringVariable? = null
     private var boundItem: InboxUiItem? = null
     private var visibilityReported = false
     private val preDrawListener = android.view.ViewTreeObserver.OnPreDrawListener {
@@ -120,6 +124,11 @@ internal class InboxDivKitView(
         super.onDetachedFromWindow()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        appearanceVariable?.set(messageCenterDivKitAppearanceValue(newConfig.uiMode).wireValue)
+    }
+
     private fun createDivView(
         entry: InboxEntry,
         rendering: RenderingResolution.Available,
@@ -133,8 +142,15 @@ internal class InboxDivKitView(
         json.optJSONObject("templates")?.let(environment::parseTemplates)
         val card = json.optJSONObject("card") ?: json
         val data = DivData(environment, card)
+        val variable = Variable.StringVariable(
+            MESSAGE_CENTER_ENGAGE_APPEARANCE_VARIABLE,
+            messageCenterDivKitAppearanceValue(resources.configuration.uiMode).wireValue,
+        )
+        appearanceVariable = variable
+        val variableController = DivVariableController().apply { putOrUpdate(variable) }
         val configuration = DivConfiguration.Builder(CoilDivImageLoader(context))
             .actionHandler(InboxDivActionHandler(entry, scope, actionRouter))
+            .divVariableController(variableController)
             .enableAccessibility(true)
             .build()
         val divContext = Div2Context(ContextThemeWrapper(context, context.theme), configuration)
@@ -210,6 +226,20 @@ internal class InboxDivKitView(
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }
+
+internal const val MESSAGE_CENTER_ENGAGE_APPEARANCE_VARIABLE = "engage_appearance"
+
+internal enum class MessageCenterDivKitAppearanceValue(val wireValue: String) {
+    SYSTEM_LIGHT("system_light"),
+    SYSTEM_DARK("system_dark"),
+}
+
+internal fun messageCenterDivKitAppearanceValue(uiMode: Int): MessageCenterDivKitAppearanceValue =
+    if (uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES) {
+        MessageCenterDivKitAppearanceValue.SYSTEM_DARK
+    } else {
+        MessageCenterDivKitAppearanceValue.SYSTEM_LIGHT
+    }
 
 private class InboxDivActionHandler(
     private val entry: InboxEntry,
