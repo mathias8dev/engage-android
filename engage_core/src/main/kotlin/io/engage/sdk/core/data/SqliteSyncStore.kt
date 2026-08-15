@@ -19,7 +19,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 
-internal class SqliteSyncStore(context: Context) : SQLiteOpenHelper(context, DATABASE, null, VERSION), SyncStore {
+internal class SqliteSyncStore(context: Context, storageScope: String = "") : SQLiteOpenHelper(
+    context,
+    scopedStorageName(DATABASE, storageScope),
+    null,
+    VERSION,
+), SyncStore {
     private val mutex = Mutex()
     private val json = Json
     private val mutableSnapshot by lazy { MutableStateFlow(readSnapshot(readableDatabase)) }

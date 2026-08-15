@@ -8,8 +8,14 @@ import io.engage.sdk.EngageLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
-internal class DefaultSdkFeatures(context: Context) : SdkFeatures {
-    private val preferences = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+internal class DefaultSdkFeatures(
+    context: Context,
+    storageScope: String = "",
+) : SdkFeatures {
+    private val preferences = context.getSharedPreferences(
+        io.engage.sdk.core.data.scopedStorageName(STORE, storageScope),
+        Context.MODE_PRIVATE,
+    )
     private val available = CORE_FEATURES.toMutableSet()
     private val disabled = preferences.getStringSet(DISABLED, emptySet()).orEmpty()
         .mapNotNullTo(mutableSetOf()) { runCatching { SdkFeature.valueOf(it) }.getOrNull() }

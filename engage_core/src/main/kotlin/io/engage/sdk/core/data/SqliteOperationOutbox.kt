@@ -22,8 +22,9 @@ import java.util.UUID
 
 internal class SqliteOperationOutbox(
     context: Context,
+    databaseScope: String = "",
     private val newBatchId: () -> String = { UUID.randomUUID().toString() },
-) : SQLiteOpenHelper(context, DATABASE, null, VERSION), OperationOutbox {
+) : SQLiteOpenHelper(context, scopedStorageName(DATABASE, databaseScope), null, VERSION), OperationOutbox {
     private val mutex = Mutex()
     private val json = Json
     private val pendingState = lazy { MutableStateFlow(readAll(readableDatabase)) }

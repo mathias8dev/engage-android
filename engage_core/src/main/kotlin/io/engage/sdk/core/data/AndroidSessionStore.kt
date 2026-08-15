@@ -20,11 +20,21 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-internal class AndroidSessionStore(context: Context) : SessionStore {
-    private val statePreferences = context.getSharedPreferences(STATE_STORE, Context.MODE_PRIVATE)
-    private val privacyPreferences = context.getSharedPreferences(PRIVACY_STORE, Context.MODE_PRIVATE)
-    private val secrets = KeystoreSecretStore(
-        context.getSharedPreferences(SECRET_STORE, Context.MODE_PRIVATE),
+internal class AndroidSessionStore(
+    context: Context,
+    storageScope: String = "",
+    secretStore: SecretStore? = null,
+) : SessionStore {
+    private val statePreferences = context.getSharedPreferences(
+        scopedStorageName(STATE_STORE, storageScope),
+        Context.MODE_PRIVATE,
+    )
+    private val privacyPreferences = context.getSharedPreferences(
+        scopedStorageName(PRIVACY_STORE, storageScope),
+        Context.MODE_PRIVATE,
+    )
+    private val secrets = secretStore ?: KeystoreSecretStore(
+        context.getSharedPreferences(scopedStorageName(SECRET_STORE, storageScope), Context.MODE_PRIVATE),
     )
     private val mutablePrivacy = MutableStateFlow(readPrivacy())
     private val mutableSession = MutableStateFlow(readSession())
@@ -129,11 +139,17 @@ internal class AndroidSessionStore(context: Context) : SessionStore {
     }
 }
 
+internal interface SecretStore {
+    fun put(key: String, value: String): Boolean
+    fun get(key: String): String?
+    fun remove(key: String): Boolean
+}
+
 internal class KeystoreSecretStore(
     private val preferences: SharedPreferences,
     private val keyAlias: String = DEFAULT_KEY_ALIAS,
-) {
-    fun put(key: String, value: String): Boolean {
+) : SecretStore {
+    override fun put(key: String, value: String): Boolean {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
         val encrypted = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))
@@ -143,7 +159,7 @@ internal class KeystoreSecretStore(
         }
     }
 
-    fun get(key: String): String? = preferences.getString(key, null)?.let { encoded ->
+    override fun get(key: String): String? = preferences.getString(key, null)?.let { encoded ->
         runCatching {
             val bytes = Base64.decode(encoded, Base64.NO_WRAP)
             require(bytes.size > IV_BYTES)
@@ -159,7 +175,7 @@ internal class KeystoreSecretStore(
         }.getOrNull()
     }
 
-    fun remove(key: String): Boolean = preferences.edit().remove(key).commit().also { success ->
+    override fun remove(key: String): Boolean = preferences.edit().remove(key).commit().also { success ->
         EngageLogger.verbose("Storage", "secret removed key=$key success=$success")
     }
 

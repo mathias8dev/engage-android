@@ -55,7 +55,7 @@ internal class DefaultPrivacy(
             payload = buildJsonObject { put("state", "OPTED_OUT") },
             allowWhileOptedOut = true,
         )
-        scope.launch { coordinator.flush() }
+        flushInBackground("optOut")
         EngageLogger.info("Privacy", "local state changed state=OPTED_OUT wipe=false")
     }
 
@@ -63,14 +63,11 @@ internal class DefaultPrivacy(
         EngageLogger.info("Privacy", "optIn requested current=${state.value}")
         coordinator.resumeAfterWipe()
         if (state.value != PrivacyState.OPTED_IN) sessions.setPrivacy(PrivacyState.OPTED_IN)
-        scope.launch {
-            coordinator.ensureInstallation()
-            coordinator.enqueue(
-                OperationType.PRIVACY_STATE_SET,
-                buildJsonObject { put("state", "OPTED_IN") },
-            )
-            coordinator.flush()
-        }
+        coordinator.enqueue(
+            OperationType.PRIVACY_STATE_SET,
+            buildJsonObject { put("state", "OPTED_IN") },
+        )
+        flushInBackground("optIn")
         replayPendingRevocation()
         EngageLogger.info("Privacy", "local state changed state=OPTED_IN")
     }
@@ -115,6 +112,14 @@ internal class DefaultPrivacy(
                 delay(backoffMillis)
                 EngageLogger.debug("Privacy", "remote revocation retry scheduled delayMillis=$backoffMillis")
                 backoffMillis = min(backoffMillis * 2, MAX_BACKOFF_MILLIS)
+            }
+        }
+    }
+
+    private fun flushInBackground(source: String) {
+        scope.launch {
+            runCatching { coordinator.flush() }.onFailure { error ->
+                EngageLogger.warn("Privacy", "$source background flush failed", error)
             }
         }
     }

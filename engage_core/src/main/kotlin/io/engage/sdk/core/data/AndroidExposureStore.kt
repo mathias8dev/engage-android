@@ -6,8 +6,11 @@ import io.engage.sdk.core.domain.ExposureStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal class AndroidExposureStore(context: Context) : ExposureStore {
-    private val preferences = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+internal class AndroidExposureStore(context: Context, storageScope: String = "") : ExposureStore {
+    private val preferences = context.getSharedPreferences(
+        scopedStorageName(STORE, storageScope),
+        Context.MODE_PRIVATE,
+    )
 
     override fun contains(exposureId: String): Boolean = preferences.contains(exposureId).also { present ->
         EngageLogger.verbose("Flags", "exposure lookup id=$exposureId present=$present")

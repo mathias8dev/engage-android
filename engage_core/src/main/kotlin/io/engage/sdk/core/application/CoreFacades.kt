@@ -161,12 +161,14 @@ internal class DefaultEvents(
     private val features: StateFlow<Set<SdkFeature>>,
     private val privacy: StateFlow<PrivacyState>,
     private val signals: MutableSharedFlow<EngageSignal>,
+    initiallyForeground: Boolean = true,
     private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
 ) : Events {
     private var currentScreen: String? = null
     private var previousScreen: String? = null
     private var visibleSince: Long? = null
     private var accumulatedVisibleMillis = 0L
+    private var appInForeground = initiallyForeground
 
     override suspend fun track(name: String, block: io.engage.sdk.EventEditor.() -> Unit) {
         io.engage.sdk.validateEventName(name)
@@ -210,7 +212,7 @@ internal class DefaultEvents(
         val previousDuration = visibleSince?.let { accumulatedVisibleMillis + (now - it).coerceAtLeast(0) }
         previousScreen = currentScreen
         currentScreen = screenKey
-        visibleSince = now
+        visibleSince = now.takeIf { appInForeground }
         accumulatedVisibleMillis = 0
         if (SdkFeature.IN_APP in features.value) signals.tryEmit(EngageSignal.ScreenViewed(screenKey))
         if (SdkFeature.ANALYTICS !in features.value) return
@@ -255,6 +257,7 @@ internal class DefaultEvents(
 
     fun onBackground() {
         EngageLogger.verbose("Events", "screen timer backgrounded current=$currentScreen")
+        appInForeground = false
         if (!screenCollectionEnabled()) return
         val since = visibleSince ?: return
         accumulatedVisibleMillis += (elapsedRealtime() - since).coerceAtLeast(0)
@@ -263,6 +266,7 @@ internal class DefaultEvents(
 
     fun onForeground() {
         EngageLogger.verbose("Events", "screen timer foregrounded current=$currentScreen")
+        appInForeground = true
         if (!screenCollectionEnabled()) return
         if (currentScreen != null && visibleSince == null) visibleSince = elapsedRealtime()
     }

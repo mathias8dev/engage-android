@@ -29,6 +29,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
@@ -63,6 +64,90 @@ class DefaultPrivacyTest {
         assertEquals(PrivacyState.OPTED_OUT, privacy.state.value)
         assertEquals(OperationType.PRIVACY_STATE_SET, outbox.pending.value.single().type)
         assertEquals("\"OPTED_OUT\"", outbox.pending.value.single().payload["state"].toString())
+    }
+
+    @Test
+    fun `opt in is in the durable outbox before the call returns`() = runTest {
+        val sessions = FakeSessions(
+            InstallationSession(
+                "installation-1", "credential", "limited-revocation", "recovery", 7,
+                PrivacyState.OPTED_OUT, "OPTED_IN", "2026-08-02T12:00:00Z",
+            ),
+        )
+        val outbox = FakeOutbox()
+        val endpoint = URI.create("https://edge.test/v1/")
+        val coordinator = OperationCoordinator(
+            endpoint,
+            "eng_app_test",
+            DeviceMetadata("fr", "UTC", "1", "1", null, null, null),
+            sessions,
+            outbox,
+            FailingRevocationApi,
+        )
+        val privacy = DefaultPrivacy(
+            endpoint, sessions, outbox, FakeSyncStore(), FakeExposures(), FakeRevocations(),
+            coordinator, FailingRevocationApi, backgroundScope,
+        )
+
+        privacy.optIn()
+
+        assertEquals(PrivacyState.OPTED_IN, privacy.state.value)
+        assertEquals(OperationType.PRIVACY_STATE_SET, outbox.pending.value.single().type)
+        assertEquals("\"OPTED_IN\"", outbox.pending.value.single().payload["state"].toString())
+    }
+
+    @Test
+    fun `opt in after wipe is durable without waiting for network bootstrap`() = runTest {
+        val sessions = FakeSessions(null)
+        val outbox = FakeOutbox()
+        val endpoint = URI.create("https://edge.test/v1/")
+        val coordinator = OperationCoordinator(
+            endpoint,
+            "eng_app_test",
+            DeviceMetadata("fr", "UTC", "1", "1", null, null, null),
+            sessions,
+            outbox,
+            FailingRevocationApi,
+        )
+        val privacy = DefaultPrivacy(
+            endpoint, sessions, outbox, FakeSyncStore(), FakeExposures(), FakeRevocations(),
+            coordinator, FailingRevocationApi, backgroundScope,
+        )
+
+        privacy.optIn()
+
+        assertEquals(PrivacyState.OPTED_IN, privacy.state.value)
+        assertEquals(0L, outbox.pending.value.single().generation)
+        assertEquals(OperationType.PRIVACY_STATE_SET, outbox.pending.value.single().type)
+    }
+
+    @Test
+    fun `background privacy flush failure is contained`() = runTest {
+        val sessions = FakeSessions(
+            InstallationSession(
+                "installation-1", "credential", "limited-revocation", "recovery", 7,
+                PrivacyState.OPTED_IN, "OPTED_IN", "2026-08-02T12:00:00Z",
+            ),
+        )
+        val outbox = FakeOutbox()
+        val endpoint = URI.create("https://edge.test/v1/")
+        val coordinator = OperationCoordinator(
+            endpoint,
+            "eng_app_test",
+            DeviceMetadata("fr", "UTC", "1", "1", null, null, null),
+            sessions,
+            outbox,
+            FailingRevocationApi,
+        )
+        val privacy = DefaultPrivacy(
+            endpoint, sessions, outbox, FakeSyncStore(), FakeExposures(), FakeRevocations(),
+            coordinator, FailingRevocationApi, backgroundScope,
+        )
+
+        privacy.optOut()
+        runCurrent()
+
+        assertFalse(outbox.pending.value.isEmpty())
     }
 
     @Test
@@ -132,9 +217,9 @@ class DefaultPrivacyTest {
         kotlinx.serialization.json.buildJsonObject {},
     )
 
-    private class FakeSessions(initial: InstallationSession) : SessionStore {
+    private class FakeSessions(initial: InstallationSession?) : SessionStore {
         override val session = MutableStateFlow<InstallationSession?>(initial)
-        override val privacy = MutableStateFlow(initial.privacy)
+        override val privacy = MutableStateFlow(initial?.privacy ?: PrivacyState.OPTED_OUT)
         override suspend fun recoveryToken() = session.value?.recoveryToken
         override suspend fun saveSession(session: InstallationSession) { this.session.value = session }
         override suspend fun setPrivacy(state: PrivacyState) { privacy.value = state }
@@ -144,7 +229,10 @@ class DefaultPrivacyTest {
     private class FakeOutbox : OperationOutbox {
         override val pending = MutableStateFlow<List<SdkOperation>>(emptyList())
         override suspend fun enqueue(operation: SdkOperation) { pending.value += operation }
-        override suspend fun reserve(limit: Int, allowedTypes: Set<OperationType>?): ReservedOperationBatch? = null
+        override suspend fun reserve(limit: Int, allowedTypes: Set<OperationType>?): ReservedOperationBatch? {
+            val eligible = pending.value.filter { allowedTypes == null || it.type in allowedTypes }.take(limit)
+            return eligible.takeIf { it.isNotEmpty() }?.let { ReservedOperationBatch("batch-1", it) }
+        }
         override suspend fun settle(batchId: String, results: List<OperationResult>) = false
         override suspend fun clear() { pending.value = emptyList() }
     }

@@ -92,6 +92,15 @@ public data class EngageHttpResponse(
 public interface EngageModuleContext {
     public val applicationContext: Context
     public val config: EngageConfig
+    /** Stable namespace separating durable optional-module state for each Engage application. */
+    public val storageScope: String
+        get() {
+            var hash = -3750763034362895579L
+            "${config.endpoint.normalize()}\u0000${config.appKey}".toByteArray(Charsets.UTF_8).forEach { byte ->
+                hash = (hash xor byte.toUByte().toLong()) * 1099511628211L
+            }
+            return hash.toULong().toString(16).padStart(16, '0')
+        }
     public val scope: CoroutineScope
     public val installationId: StateFlow<String?>
     public val generation: StateFlow<Long>

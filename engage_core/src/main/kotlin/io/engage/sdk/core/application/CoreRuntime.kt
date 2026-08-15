@@ -28,6 +28,8 @@ import io.engage.sdk.core.data.AndroidRevocationStore
 import io.engage.sdk.core.data.OkHttpMobileEdgeApi
 import io.engage.sdk.core.data.SqliteOperationOutbox
 import io.engage.sdk.core.data.SqliteSyncStore
+import io.engage.sdk.core.data.migrateLegacyCoreStorage
+import io.engage.sdk.core.data.storageScope
 import io.engage.sdk.core.domain.DeviceMetadata
 import io.engage.sdk.core.domain.OperationType
 import io.engage.sdk.core.domain.SdkModule
@@ -70,13 +72,17 @@ internal class CoreRuntime(
     override val config: EngageConfig,
 ) : EngageModuleContext, DefaultLifecycleObserver {
     override val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val sessions = AndroidSessionStore(applicationContext)
-    private val outbox = SqliteOperationOutbox(applicationContext)
-    private val syncStore = SqliteSyncStore(applicationContext)
-    private val exposures = AndroidExposureStore(applicationContext)
-    private val revocations = AndroidRevocationStore(applicationContext)
+    private val persistenceScope = storageScope(config.appKey, config.endpoint)
+    init {
+        migrateLegacyCoreStorage(applicationContext, persistenceScope)
+    }
+    private val sessions = AndroidSessionStore(applicationContext, persistenceScope)
+    private val outbox = SqliteOperationOutbox(applicationContext, databaseScope = persistenceScope)
+    private val syncStore = SqliteSyncStore(applicationContext, persistenceScope)
+    private val exposures = AndroidExposureStore(applicationContext, persistenceScope)
+    private val revocations = AndroidRevocationStore(applicationContext, persistenceScope)
     private val api = OkHttpMobileEdgeApi(OkHttpClient.Builder().build())
-    private val features = DefaultSdkFeatures(applicationContext)
+    private val features = DefaultSdkFeatures(applicationContext, persistenceScope)
     private val actionsDelegate = DefaultActions()
     private val mutableSignals = MutableSharedFlow<EngageSignal>(extraBufferCapacity = 64)
     private val syncModules = CopyOnWriteArraySet(CORE_SYNC_MODULES)
@@ -107,7 +113,15 @@ internal class CoreRuntime(
 
     val installation: Installation = DefaultInstallation(sessions, operationCoordinator, scope)
     val profile: Profile = DefaultProfile(operationCoordinator)
-    val eventsDelegate = DefaultEvents(operationCoordinator, features.enabled, sessions.privacy, mutableSignals)
+    val eventsDelegate = DefaultEvents(
+        operationCoordinator,
+        features.enabled,
+        sessions.privacy,
+        mutableSignals,
+        initiallyForeground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
+            androidx.lifecycle.Lifecycle.State.STARTED,
+        ),
+    )
     val events: Events = eventsDelegate
     val actions: Actions = actionsDelegate
     val sdkFeatures: SdkFeatures = features

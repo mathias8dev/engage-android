@@ -9,19 +9,39 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-internal class AndroidRevocationStore(context: Context) : RevocationStore {
-    private val preferences = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
-    private val secrets = KeystoreSecretStore(preferences, REVOCATION_KEY_ALIAS)
+internal class AndroidRevocationStore(
+    context: Context,
+    storageScope: String = "",
+    secretStore: SecretStore? = null,
+) : RevocationStore {
+    private val preferences = context.getSharedPreferences(
+        scopedStorageName(STORE, storageScope),
+        Context.MODE_PRIVATE,
+    )
+    private val secrets = secretStore ?: KeystoreSecretStore(preferences, REVOCATION_KEY_ALIAS)
     private val mutex = Mutex()
 
     override suspend fun get(): RevocationEnvelope? = mutex.withLock {
         withContext(Dispatchers.IO) {
-            val operationId = preferences.getStringSet(OPERATION_IDS, emptySet()).orEmpty().minOrNull()
-                ?: return@withContext null
-            val credential = secrets.get(credentialKey(operationId)) ?: return@withContext null
-            RevocationEnvelope(operationId, credential).also {
-                EngageLogger.verbose("Privacy", "pending revocation loaded operationId=$operationId")
+            val ids = preferences.getStringSet(OPERATION_IDS, emptySet()).orEmpty().sorted()
+            for (operationId in ids) {
+                val credential = secrets.get(credentialKey(operationId))
+                if (credential == null) {
+                    val remaining = preferences.getStringSet(OPERATION_IDS, emptySet()).orEmpty() - operationId
+                    check(preferences.edit().putStringSet(OPERATION_IDS, remaining).commit()) {
+                        "Could not discard invalid revocation operation"
+                    }
+                    EngageLogger.warn(
+                        "Privacy",
+                        "invalid revocation discarded operationId=$operationId reason=missing_credential",
+                    )
+                    continue
+                }
+                return@withContext RevocationEnvelope(operationId, credential).also {
+                    EngageLogger.verbose("Privacy", "pending revocation loaded operationId=$operationId")
+                }
             }
+            null
         }
     }
 
@@ -40,10 +60,12 @@ internal class AndroidRevocationStore(context: Context) : RevocationStore {
 
     override suspend fun clear(operationId: String): Unit = mutex.withLock {
         withContext(Dispatchers.IO) {
-            secrets.remove(credentialKey(operationId))
             val ids = preferences.getStringSet(OPERATION_IDS, emptySet()).orEmpty() - operationId
             check(preferences.edit().putStringSet(OPERATION_IDS, ids).commit()) {
                 "Could not clear revocation operation"
+            }
+            if (!secrets.remove(credentialKey(operationId))) {
+                EngageLogger.warn("Privacy", "revocation credential cleanup failed operationId=$operationId")
             }
             EngageLogger.info("Privacy", "revocation cleared operationId=$operationId")
         }
