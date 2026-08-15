@@ -30,4 +30,3 @@ public interface PreferenceCenter {
     fun display()
     fun display(key: String)
 }
-

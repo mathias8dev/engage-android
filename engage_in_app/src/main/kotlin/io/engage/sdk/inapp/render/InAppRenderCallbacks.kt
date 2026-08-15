@@ -11,4 +11,3 @@ internal interface InAppRenderCallbacks {
     fun onAction(content: InAppContent, name: String, arguments: JsonObject)
     fun onRenderFailed(content: InAppContent)
 }
-

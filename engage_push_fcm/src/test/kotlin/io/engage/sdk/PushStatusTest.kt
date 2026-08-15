@@ -16,4 +16,3 @@ class PushStatusTest {
         assertEquals(PushPermission.DENIED, status.permission)
     }
 }
-

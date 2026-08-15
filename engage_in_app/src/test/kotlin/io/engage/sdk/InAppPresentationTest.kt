@@ -11,4 +11,3 @@ class InAppPresentationTest {
         assertEquals(EmptyStatePolicy.COLLAPSE, embedded.emptyState)
     }
 }
-

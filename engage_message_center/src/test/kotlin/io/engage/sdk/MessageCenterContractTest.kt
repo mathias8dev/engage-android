@@ -20,4 +20,3 @@ class MessageCenterContractTest {
         assertEquals(InboxEntryId("entry-1"), entry.id)
     }
 }
-

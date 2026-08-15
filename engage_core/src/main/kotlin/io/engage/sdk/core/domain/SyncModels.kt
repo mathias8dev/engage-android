@@ -68,4 +68,3 @@ internal data class RevocationEnvelope(
     val operationId: String,
     val credential: String,
 )
-

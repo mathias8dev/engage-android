@@ -1,65 +1,41 @@
-import java.time.Instant
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    id("com.android.library") version "8.11.1"
-    id("org.jetbrains.kotlin.android") version "2.0.21"
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
     id("maven-publish")
 }
-
-group = "com.github.mathias8dev"
-val engageReleaseVersion = providers.gradleProperty("engageReleaseVersion").get()
-val localBuildVersion = providers.provider {
-    val timestamp = DateTimeFormatter.ofPattern("yyMMddHHmm")
-        .withZone(ZoneOffset.UTC)
-        .format(Instant.now())
-    "$engageReleaseVersion-$timestamp"
-}
-val engageVersion = providers.gradleProperty("engageVersion")
-    .orElse(providers.environmentVariable("VERSION"))
-    .orElse(localBuildVersion)
-    .get()
-val engageDependencyVersion = providers.gradleProperty("engageDependencyVersion")
-    .orElse(providers.environmentVariable("VERSION"))
-    .getOrElse("main-SNAPSHOT")
-version = engageVersion
 
 android {
     namespace = "io.engage.sdk.push.fcm"
     compileSdk = 36
-
     defaultConfig {
         minSdk = 23
         consumerProguardFiles("consumer-rules.pro")
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
-    kotlinOptions {
-        jvmTarget = "17"
-        freeCompilerArgs += "-Xjvm-default=all"
-    }
-
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.all { it.useJUnit() }
     }
+    publishing { singleVariant("release") { withSourcesJar() } }
+}
 
-    publishing {
-        singleVariant("release") { withSourcesJar() }
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+        freeCompilerArgs.add("-Xjvm-default=all")
     }
 }
 
 dependencies {
-    api("com.github.mathias8dev:engage-android-core:$engageDependencyVersion")
+    api(project(":engage_core"))
     implementation("com.google.firebase:firebase-messaging:25.1.1")
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.work:work-runtime-ktx:2.11.0")
-
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("androidx.test:core:1.7.0")

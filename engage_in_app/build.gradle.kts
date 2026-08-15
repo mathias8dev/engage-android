@@ -1,50 +1,24 @@
-import java.time.Instant
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    id("com.android.library") version "8.11.1"
-    id("org.jetbrains.kotlin.android") version "2.2.10"
-    id("org.jetbrains.kotlin.plugin.compose") version "2.2.10"
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
     id("maven-publish")
 }
-
-group = "com.github.mathias8dev"
-val engageReleaseVersion = providers.gradleProperty("engageReleaseVersion").get()
-val localBuildVersion = providers.provider {
-    val timestamp = DateTimeFormatter.ofPattern("yyMMddHHmm")
-        .withZone(ZoneOffset.UTC)
-        .format(Instant.now())
-    "$engageReleaseVersion-$timestamp"
-}
-val engageVersion = providers.gradleProperty("engageVersion")
-    .orElse(providers.environmentVariable("VERSION"))
-    .orElse(localBuildVersion)
-    .get()
-val engageDependencyVersion = providers.gradleProperty("engageDependencyVersion")
-    .orElse(providers.environmentVariable("VERSION"))
-    .getOrElse("main-SNAPSHOT")
-version = engageVersion
 
 android {
     namespace = "io.engage.sdk.inapp"
     compileSdk = 36
-
     defaultConfig {
         minSdk = 23
         consumerProguardFiles("consumer-rules.pro")
     }
-
     buildFeatures { compose = true }
-
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
-        freeCompilerArgs += "-Xjvm-default=all"
     }
     testOptions {
         unitTests.isIncludeAndroidResources = true
@@ -53,10 +27,16 @@ android {
     publishing { singleVariant("release") { withSourcesJar() } }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+        freeCompilerArgs.add("-Xjvm-default=all")
+    }
+}
+
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-
-    api("com.github.mathias8dev:engage-android-core:$engageDependencyVersion")
+    api(project(":engage_core"))
     api("androidx.compose.ui:ui:1.11.4")
     implementation("androidx.activity:activity:1.13.0")
     implementation("androidx.compose.foundation:foundation-layout:1.11.4")
@@ -66,7 +46,6 @@ dependencies {
     implementation("com.yandex.div:div-core:32.60.0")
     implementation("com.yandex.div:div-json:32.60.0")
     implementation("com.yandex.div:coil:32.60.0")
-
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("androidx.test:core:1.7.0")

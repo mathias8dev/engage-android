@@ -12,4 +12,3 @@ class EngageConfigTest {
         assertEquals(URI.create("https://api.engage.io/v1/"), config.endpoint)
     }
 }
-

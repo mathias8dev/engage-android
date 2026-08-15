@@ -8,4 +8,3 @@ public interface FeatureFlags {
     fun getNumber(key: String, default: Double): Double
     fun <T> getJson(key: String, serializer: KSerializer<T>, default: T): T
 }
-

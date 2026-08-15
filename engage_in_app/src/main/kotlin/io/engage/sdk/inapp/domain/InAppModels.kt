@@ -72,4 +72,3 @@ internal data class ImpressionHistory(
     val lastImpressionAt: Instant? = null,
     val lastDismissedAt: Instant? = null,
 )
-

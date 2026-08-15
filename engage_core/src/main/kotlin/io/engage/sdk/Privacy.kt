@@ -14,4 +14,3 @@ public interface Privacy {
     suspend fun optOut()
     suspend fun optOutAndWipe()
 }
-
