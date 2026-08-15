@@ -89,6 +89,25 @@ class SqliteInboxStoreTest {
         assertTrue(store.cachedWindow(7, 20).entryIds.isEmpty())
     }
 
+    @Test
+    fun `application storage scopes cannot read each others inbox`() = runTest {
+        val first = SqliteInboxStore(context, databaseName = "engage_message_center_first.db")
+        val second = SqliteInboxStore(context, databaseName = "engage_message_center_second.db")
+        try {
+            first.activateGeneration(7)
+            first.savePage(7, 20, null, page(entry("tenant-one", read = false)))
+            second.activateGeneration(7)
+
+            assertEquals(setOf("tenant-one"), first.snapshot.value.entries.keys)
+            assertTrue(second.snapshot.value.entries.isEmpty())
+        } finally {
+            first.close()
+            second.close()
+            context.deleteDatabase("engage_message_center_first.db")
+            context.deleteDatabase("engage_message_center_second.db")
+        }
+    }
+
     private fun page(vararg entries: RemoteInboxEntry) = RemoteInboxPage(
         entries.toList(),
         nextCursor = null,

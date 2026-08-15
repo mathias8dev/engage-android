@@ -33,7 +33,8 @@ internal class SqliteInboxStore(
     private val clock: Clock = Clock.systemUTC(),
     private val newId: () -> String = { UUID.randomUUID().toString() },
     private val json: Json = Json,
-) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION), InboxStore {
+    databaseName: String = DATABASE_NAME,
+) : SQLiteOpenHelper(context, databaseName, null, DATABASE_VERSION), InboxStore {
     private val mutex = Mutex()
     private val mutableSnapshot = MutableStateFlow(InboxStoreSnapshot())
     private var activeGeneration: Long? = null

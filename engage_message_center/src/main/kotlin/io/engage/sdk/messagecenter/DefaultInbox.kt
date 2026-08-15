@@ -27,6 +27,7 @@ import io.engage.sdk.messagecenter.domain.RemoteInboxEntry
 import io.engage.sdk.messagecenter.domain.RemoteInboxPage
 import io.engage.sdk.spi.EngageModuleContext
 import io.engage.sdk.spi.EngageSignal
+import io.engage.sdk.spi.scopedDatabaseName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -54,7 +55,10 @@ import kotlin.coroutines.cancellation.CancellationException
 
 internal class DefaultInbox(
     private val context: EngageModuleContext,
-    private val store: InboxStore = SqliteInboxStore(context.applicationContext),
+    private val store: InboxStore = SqliteInboxStore(
+        context.applicationContext,
+        databaseName = context.scopedDatabaseName("engage_message_center.db"),
+    ),
     private val client: InboxClient = InboxClient(context),
     private val clock: Clock = Clock.systemUTC(),
     private val newId: () -> String = { UUID.randomUUID().toString() },
