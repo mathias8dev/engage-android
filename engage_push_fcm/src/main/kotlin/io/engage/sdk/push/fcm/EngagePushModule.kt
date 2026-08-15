@@ -52,13 +52,21 @@ internal object EngagePushModule : EngageModule {
     fun onDismiss(intent: android.content.Intent) = (api as? DefaultPush)?.onDismiss(intent)
         ?: run { EngageLogger.warn("Push", "dismiss received before Engage.start") }
 
-    fun onAction(intent: android.content.Intent) = (api as? DefaultPush)?.onAction(intent)
-        ?: run { EngageLogger.warn("Push", "action received before Engage.start") }
+    suspend fun onAction(intent: android.content.Intent) {
+        (api as? DefaultPush)?.onAction(intent)
+            ?: EngageLogger.warn("Push", "action received before Engage.start")
+    }
 
     fun onOpen(intent: android.content.Intent): Boolean = (api as? DefaultPush)?.handleOpenIntent(intent) ?: run {
         EngageLogger.warn("Push", "open received before Engage.start")
         false
     }
+
+    suspend fun onOpenAwaitingWork(intent: android.content.Intent): Boolean =
+        (api as? DefaultPush)?.handleOpenIntentAwaitingWork(intent) ?: run {
+            EngageLogger.warn("Push", "open received before Engage.start")
+            false
+        }
 }
 
 public class EngagePushInitProvider : ContentProvider() {

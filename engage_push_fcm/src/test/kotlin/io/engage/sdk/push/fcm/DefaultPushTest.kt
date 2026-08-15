@@ -25,6 +25,7 @@ import io.engage.sdk.spi.EngageRemoteDocument
 import io.engage.sdk.spi.EngageSignal
 import io.engage.sdk.spi.EngageSyncModule
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -55,7 +56,7 @@ class DefaultPushTest {
     @Test
     fun `permission is retried when the durable outbox rejects the first enqueue`() = runTest {
         val application = ApplicationProvider.getApplicationContext<Application>()
-        application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
+        application.getSharedPreferences("engage_push_test", Context.MODE_PRIVATE).edit().clear().commit()
         val context = FakeModuleContext(application, backgroundScope).apply { acceptOperations = false }
         DefaultPush(
             moduleContext = context,
@@ -74,13 +75,13 @@ class DefaultPushTest {
             listOf(PushPermission.AUTHORIZED.name),
             context.operations.filterIsInstance<EngageModuleOperation.PushPermissionChanged>().map { it.permission },
         )
-        application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
+        application.getSharedPreferences("engage_push_test", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
     @Test
     fun `concurrent startup signals enqueue one token and await server registration`() = runTest {
         val application = ApplicationProvider.getApplicationContext<Application>()
-        application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
+        application.getSharedPreferences("engage_push_test", Context.MODE_PRIVATE).edit().clear().commit()
         val context = FakeModuleContext(application, backgroundScope)
         val push = DefaultPush(
             moduleContext = context,
@@ -107,7 +108,7 @@ class DefaultPushTest {
         runCurrent()
 
         assertTrue(push.status.value.tokenRegistered)
-        application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
+        application.getSharedPreferences("engage_push_test", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
     @Test
@@ -167,6 +168,35 @@ class DefaultPushTest {
     }
 
     @Test
+    fun `notification action does not complete before durable work finishes`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        clearState(application)
+        val gate = CompletableDeferred<Unit>()
+        val context = FakeModuleContext(application, backgroundScope, pushConfig()).apply {
+            beforeExecuteAction = { gate.await() }
+        }
+        val push = DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+        )
+        runCurrent()
+        val intent = Intent().apply {
+            pushPayload().forEach(::putExtra)
+            putExtra("engage_push_action_key", "open_order")
+        }
+
+        val processing = async { push.onAction(intent) }
+        runCurrent()
+
+        assertFalse(processing.isCompleted)
+        assertTrue(context.operations.filterIsInstance<EngageModuleOperation.PushReceipt>().isNotEmpty())
+        gate.complete(Unit)
+        processing.await()
+        clearState(application)
+    }
+
+    @Test
     fun `opening a deep link emits filtered data without navigating on behalf of the app`() = runTest {
         val application = ApplicationProvider.getApplicationContext<Application>()
         clearState(application)
@@ -193,6 +223,32 @@ class DefaultPushTest {
             event.await(),
         )
         assertNull(shadowOf(application).nextStartedActivity)
+        clearState(application)
+    }
+
+    @Test
+    fun `notification trampoline can await open work before finishing`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        clearState(application)
+        val gate = CompletableDeferred<Unit>()
+        val context = FakeModuleContext(application, backgroundScope, pushConfig()).apply {
+            beforeExecuteAction = { gate.await() }
+        }
+        val push = DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+        )
+        runCurrent()
+        val intent = Intent().apply { pushPayload(actionType = "CUSTOM").forEach(::putExtra) }
+
+        val processing = async { push.handleOpenIntentAwaitingWork(intent) }
+        runCurrent()
+
+        assertFalse(processing.isCompleted)
+        assertTrue(context.operations.filterIsInstance<EngageModuleOperation.PushReceipt>().isNotEmpty())
+        gate.complete(Unit)
+        assertTrue(processing.await())
         clearState(application)
     }
 
@@ -268,6 +324,7 @@ class DefaultPushTest {
 
     private fun clearState(application: Application) {
         application.getSharedPreferences("engage_push", Context.MODE_PRIVATE).edit().clear().commit()
+        application.getSharedPreferences("engage_push_test", Context.MODE_PRIVATE).edit().clear().commit()
         application.getSystemService(NotificationManager::class.java).cancelAll()
     }
 
@@ -276,6 +333,7 @@ class DefaultPushTest {
         override val scope: CoroutineScope,
         override val config: EngageConfig = EngageConfig("eng_app_test"),
     ) : EngageModuleContext {
+        override val storageScope: String = "test"
         override val installationId = MutableStateFlow<String?>("installation-1")
         override val generation = MutableStateFlow(1L)
         override val privacy = MutableStateFlow(PrivacyState.OPTED_IN)
@@ -287,6 +345,7 @@ class DefaultPushTest {
         var acceptOperations = true
         var executedAction: String? = null
         var executedArguments: JsonObject? = null
+        var beforeExecuteAction: suspend () -> Unit = {}
 
         override fun documents(module: EngageSyncModule): StateFlow<List<EngageRemoteDocument>> = pushDocuments
         override suspend fun enqueue(operation: EngageModuleOperation): Boolean {
@@ -295,6 +354,7 @@ class DefaultPushTest {
         }
         override suspend fun refresh() = Unit
         override suspend fun executeAction(name: String, arguments: JsonObject): Boolean {
+            beforeExecuteAction()
             executedAction = name
             executedArguments = arguments
             return true

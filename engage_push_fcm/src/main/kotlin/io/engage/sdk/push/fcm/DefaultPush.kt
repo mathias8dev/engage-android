@@ -40,6 +40,7 @@ import io.engage.sdk.spi.EngageModuleContext
 import io.engage.sdk.spi.EngageModuleOperation
 import io.engage.sdk.spi.EngageSignal
 import io.engage.sdk.spi.EngageSyncModule
+import io.engage.sdk.spi.scopedPreferencesName
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,7 +65,10 @@ internal class DefaultPush(
     private val notificationObserver: (Notification) -> Unit = {},
 ) : Push {
     private val application = moduleContext.applicationContext as Application
-    private val preferences = application.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    private val preferences = application.getSharedPreferences(
+        moduleContext.scopedPreferencesName(PREFERENCES),
+        Context.MODE_PRIVATE,
+    )
     private val mutableStatus = MutableStateFlow(
         PushStatus(
             permission = permissionProvider.current(application),
@@ -227,7 +231,7 @@ internal class DefaultPush(
         moduleContext.logInfo("Push", "notification dismissed deliveryId=${payload.deliveryId} eventEmitted=$emitted")
     }
 
-    fun onAction(intent: Intent) {
+    suspend fun onAction(intent: Intent) {
         val payload = EngagePushPayload.from(intent.stringExtras()) ?: return
         val actionKey = intent.getStringExtra(EXTRA_ACTION_KEY)?.takeIf(String::isNotBlank) ?: run {
             moduleContext.logWarn("Push", "notification action ignored deliveryId=${payload.deliveryId} reason=missing_key")
@@ -245,42 +249,52 @@ internal class DefaultPush(
             "Push",
             "notification action selected deliveryId=${payload.deliveryId} action=$actionKey eventEmitted=$emitted",
         )
-        moduleContext.scope.launch {
-            val receiptAccepted = moduleContext.enqueue(
-                EngageModuleOperation.PushReceipt(
-                    payload.deliveryId,
-                    io.engage.sdk.spi.PushReceiptType.OPENED,
-                ),
-            )
-            val actionCompleted = moduleContext.executeAction(
-                actionKey,
-                JsonObject(payload.actionArguments.mapValues { JsonPrimitive(it.value) }),
-            )
-            moduleContext.logInfo(
-                "Push",
-                "notification action processed deliveryId=${payload.deliveryId} action=$actionKey " +
-                    "receiptAccepted=$receiptAccepted completed=$actionCompleted",
-            )
-            if (intent.getBooleanExtra(EXTRA_ACTION_OPENS_APP, false)) {
-                application.packageManager.getLaunchIntentForPackage(application.packageName)?.let { launcher ->
-                    payload.data.forEach { (key, value) -> launcher.putExtra(key, value) }
-                    application.startActivity(launcher.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                    moduleContext.logDebug("Push", "host application launched action=$actionKey")
-                }
+        val receiptAccepted = moduleContext.enqueue(
+            EngageModuleOperation.PushReceipt(
+                payload.deliveryId,
+                io.engage.sdk.spi.PushReceiptType.OPENED,
+            ),
+        )
+        val actionCompleted = moduleContext.executeAction(
+            actionKey,
+            JsonObject(payload.actionArguments.mapValues { JsonPrimitive(it.value) }),
+        )
+        moduleContext.logInfo(
+            "Push",
+            "notification action processed deliveryId=${payload.deliveryId} action=$actionKey " +
+                "receiptAccepted=$receiptAccepted completed=$actionCompleted",
+        )
+        if (intent.getBooleanExtra(EXTRA_ACTION_OPENS_APP, false)) {
+            application.packageManager.getLaunchIntentForPackage(application.packageName)?.let { launcher ->
+                payload.data.forEach { (key, value) -> launcher.putExtra(key, value) }
+                application.startActivity(launcher.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                moduleContext.logDebug("Push", "host application launched action=$actionKey")
             }
         }
     }
 
     override fun handleOpenIntent(intent: Intent): Boolean {
+        val prepared = prepareOpen(intent)
+        prepared.payload?.let { payload -> moduleContext.scope.launch { processOpen(payload) } }
+        return prepared.handled
+    }
+
+    suspend fun handleOpenIntentAwaitingWork(intent: Intent): Boolean {
+        val prepared = prepareOpen(intent)
+        prepared.payload?.let { processOpen(it) }
+        return prepared.handled
+    }
+
+    private fun prepareOpen(intent: Intent): PreparedOpen {
         if (intent.getBooleanExtra(EXTRA_HANDLED, false)) {
             moduleContext.logVerbose("Push", "open intent ignored reason=already_handled")
-            return true
+            return PreparedOpen(handled = true)
         }
-        val payload = EngagePushPayload.from(intent.stringExtras()) ?: return false
+        val payload = EngagePushPayload.from(intent.stringExtras()) ?: return PreparedOpen(handled = false)
         intent.putExtra(EXTRA_HANDLED, true)
         if (!canRun()) {
             moduleContext.logDebug("Push", "open ignored deliveryId=${payload.deliveryId} reason=${disabledReason()}")
-            return true
+            return PreparedOpen(handled = true)
         }
         val deepLink = payload.actionValue.takeIf { payload.actionType == "DEEPLINK" }
         val emitted = mutableEvents.tryEmit(
@@ -291,32 +305,33 @@ internal class DefaultPush(
             "notification opened deliveryId=${payload.deliveryId} messageId=${payload.messageId} " +
                 "actionType=${payload.actionType} eventEmitted=$emitted",
         )
-        moduleContext.scope.launch {
-            val receiptAccepted = moduleContext.enqueue(
-                EngageModuleOperation.PushReceipt(
-                    payload.deliveryId,
-                    io.engage.sdk.spi.PushReceiptType.OPENED,
-                ),
-            )
-            moduleContext.logDebug(
-                "Push",
-                "open receipt enqueued deliveryId=${payload.deliveryId} accepted=$receiptAccepted",
-            )
-            when (payload.actionType) {
-                "CUSTOM" -> payload.actionValue?.let { action ->
-                    val completed = moduleContext.executeAction(
-                        action,
-                        JsonObject(payload.actionArguments.mapValues { JsonPrimitive(it.value) }),
-                    )
-                    moduleContext.logInfo("Push", "custom open action=$action completed=$completed")
-                }
-                // Application deep links remain owned by the host. WEB_URL is a complete
-                // Engage action and opens the external browser without host-side plumbing.
-                "DEEPLINK" -> Unit
-                "WEB_URL" -> openWebUrl(payload)
+        return PreparedOpen(handled = true, payload = payload)
+    }
+
+    private suspend fun processOpen(payload: EngagePushPayload) {
+        val receiptAccepted = moduleContext.enqueue(
+            EngageModuleOperation.PushReceipt(
+                payload.deliveryId,
+                io.engage.sdk.spi.PushReceiptType.OPENED,
+            ),
+        )
+        moduleContext.logDebug(
+            "Push",
+            "open receipt enqueued deliveryId=${payload.deliveryId} accepted=$receiptAccepted",
+        )
+        when (payload.actionType) {
+            "CUSTOM" -> payload.actionValue?.let { action ->
+                val completed = moduleContext.executeAction(
+                    action,
+                    JsonObject(payload.actionArguments.mapValues { JsonPrimitive(it.value) }),
+                )
+                moduleContext.logInfo("Push", "custom open action=$action completed=$completed")
             }
+            // Application deep links remain owned by the host. WEB_URL is a complete
+            // Engage action and opens the external browser without host-side plumbing.
+            "DEEPLINK" -> Unit
+            "WEB_URL" -> openWebUrl(payload)
         }
-        return true
     }
 
     private fun openWebUrl(payload: EngagePushPayload) {
@@ -349,6 +364,11 @@ internal class DefaultPush(
             )
         }
     }
+
+    private data class PreparedOpen(
+        val handled: Boolean,
+        val payload: EngagePushPayload? = null,
+    )
 
     private suspend fun synchronizeToken() = tokenMutex.withLock {
         moduleContext.logVerbose("Push", "token synchronization started")
