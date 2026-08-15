@@ -23,6 +23,7 @@ import io.engage.sdk.spi.EngageModuleContext
 import io.engage.sdk.spi.EngageModuleOperation
 import io.engage.sdk.spi.EngageSyncModule
 import io.engage.sdk.spi.InteractionType
+import io.engage.sdk.spi.scopedPreferencesName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -40,7 +41,11 @@ import java.util.concurrent.atomic.AtomicInteger
 
 internal class DefaultInApp(private val context: EngageModuleContext) : InApp, InAppRenderCallbacks {
     private val mutex = Mutex()
-    private val history = SharedPreferencesInAppHistory(context.applicationContext) { context.generation.value }
+    private val history = SharedPreferencesInAppHistory(
+        context.applicationContext,
+        preferencesName = context.scopedPreferencesName("engage_in_app_history"),
+        generation = { context.generation.value },
+    )
     private val evaluator = InAppEvaluator(
         history = history,
         installationSeed = { context.installationId.value ?: context.config.appKey },

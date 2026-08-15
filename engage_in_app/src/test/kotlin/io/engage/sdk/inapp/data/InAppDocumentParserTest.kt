@@ -32,6 +32,22 @@ class InAppDocumentParserTest {
         assertEquals(null, InAppDocumentParser.parse(malformed))
     }
 
+    @Test
+    fun `rejects auto dismiss overlays without a positive duration`() {
+        val malformed = EngageRemoteDocument(
+            "bad-auto-dismiss",
+            1,
+            Json.parseToJsonElement(
+                EXPERIENCE.replace(
+                    "{\"mode\":\"EMBEDDED\",\"embedded\":{\"placementKey\":\"home.hero\",\"emptyState\":\"COLLAPSE\"}}",
+                    "{\"mode\":\"OVERLAY\",\"overlay\":{\"dismissal\":\"AUTO_DISMISS\"}}",
+                ),
+            ).jsonObject,
+        )
+
+        assertEquals(null, InAppDocumentParser.parse(malformed))
+    }
+
     private companion object {
         val EXPERIENCE = """
             {

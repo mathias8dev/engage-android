@@ -141,13 +141,18 @@ internal object InAppDocumentParser {
 
     private fun parsePresentation(value: JsonObject): PresentationSpec = when (value.requiredString("mode")) {
         "OVERLAY" -> value.requiredObject("overlay").let { overlay ->
+            val dismissal = overlay.enum("dismissal", DismissalPolicy.USER_DISMISSIBLE)
+            val autoDismissAfterSeconds = overlay.int("autoDismissAfterSeconds")
+            require(dismissal != DismissalPolicy.AUTO_DISMISS || autoDismissAfterSeconds?.let { it > 0 } == true) {
+                "AUTO_DISMISS requires a positive autoDismissAfterSeconds"
+            }
             OverlayPresentation(
                 format = overlay.enum("format", OverlayFormat.MODAL),
                 position = overlay.string("position")?.let(OverlayPosition::valueOf),
                 backdrop = overlay.enum("backdrop", BackdropPolicy.NONE),
-                dismissal = overlay.enum("dismissal", DismissalPolicy.USER_DISMISSIBLE),
+                dismissal = dismissal,
                 animation = overlay.enum("animation", InAppAnimation.NONE),
-                autoDismissAfterSeconds = overlay.int("autoDismissAfterSeconds"),
+                autoDismissAfterSeconds = autoDismissAfterSeconds,
             )
         }
         "EMBEDDED" -> value.requiredObject("embedded").let { embedded ->

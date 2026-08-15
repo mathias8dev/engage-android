@@ -2,6 +2,7 @@ package io.engage.sdk.inapp.render
 
 import android.content.Context
 import android.annotation.SuppressLint
+import android.content.res.Configuration
 import android.graphics.Rect
 import android.net.Uri
 import android.view.ContextThemeWrapper
@@ -20,7 +21,9 @@ import com.yandex.div.core.Div2Context
 import com.yandex.div.core.DivActionHandler
 import com.yandex.div.core.DivConfiguration
 import com.yandex.div.core.DivViewFacade
+import com.yandex.div.core.expression.variables.DivVariableController
 import com.yandex.div.core.view2.Div2View
+import com.yandex.div.data.Variable
 import com.yandex.div.data.DivParsingEnvironment
 import com.yandex.div.json.ParsingErrorLogger
 import com.yandex.div2.DivData
@@ -40,6 +43,7 @@ internal class EngageContentView(
     private val content: InAppContent,
     private val callbacks: InAppRenderCallbacks,
 ) : FrameLayout(context) {
+    private var appearanceVariable: Variable.StringVariable? = null
     private val visibilityGate = RenderedVisibilityGate()
     private val preDrawListener = android.view.ViewTreeObserver.OnPreDrawListener {
         reportVisibilityIfNeeded()
@@ -88,6 +92,11 @@ internal class EngageContentView(
         super.onDetachedFromWindow()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        appearanceVariable?.set(divKitAppearanceValue(newConfig.uiMode).wireValue)
+    }
+
     private fun createContentView(): View = when (content.type) {
         InAppContentType.SCENE,
         InAppContentType.SURVEY,
@@ -104,8 +113,15 @@ internal class EngageContentView(
         val card = json.optJSONObject("card") ?: json
         val data = DivData(environment, card)
         val actionHandler = EngageDivActionHandler(content, callbacks)
+        val variable = Variable.StringVariable(
+            ENGAGE_APPEARANCE_VARIABLE,
+            divKitAppearanceValue(resources.configuration.uiMode).wireValue,
+        )
+        appearanceVariable = variable
+        val variableController = DivVariableController().apply { putOrUpdate(variable) }
         val configuration = DivConfiguration.Builder(CoilDivImageLoader(context))
             .actionHandler(actionHandler)
+            .divVariableController(variableController)
             .enableAccessibility(true)
             .build()
         val divContext = Div2Context(
@@ -227,6 +243,20 @@ internal class EngageContentView(
         reportVisibilityIfNeeded()
     }
 }
+
+internal const val ENGAGE_APPEARANCE_VARIABLE = "engage_appearance"
+
+internal enum class EngageDivKitAppearanceValue(val wireValue: String) {
+    SYSTEM_LIGHT("system_light"),
+    SYSTEM_DARK("system_dark"),
+}
+
+internal fun divKitAppearanceValue(uiMode: Int): EngageDivKitAppearanceValue =
+    if (uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES) {
+        EngageDivKitAppearanceValue.SYSTEM_DARK
+    } else {
+        EngageDivKitAppearanceValue.SYSTEM_LIGHT
+    }
 
 internal class RenderedVisibilityGate {
     private var ready = false

@@ -11,10 +11,11 @@ import java.time.Instant
 
 internal class SharedPreferencesInAppHistory(
     context: Context,
+    preferencesName: String = "engage_in_app_history",
     private val generation: () -> Long,
 ) : InAppHistory {
     private val preferences: SharedPreferences =
-        context.getSharedPreferences("engage_in_app_history", Context.MODE_PRIVATE)
+        context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
 
     override val sessionId: Long
         @Synchronized get() = preferences.getLong(globalKey("session_id"), 0)
@@ -79,7 +80,7 @@ internal class SharedPreferencesInAppHistory(
 
     @Synchronized
     fun clearAll() {
-        preferences.edit().clear().apply()
+        check(preferences.edit().clear().commit()) { "Could not durably clear Engage in-app history" }
         EngageLogger.warn("InAppHistory", "history cleared")
     }
 
