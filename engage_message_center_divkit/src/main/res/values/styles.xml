@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="EngageMessageCenterTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:statusBarColor">@color/engage_message_center_header</item>
+        <item name="android:navigationBarColor">@color/engage_message_center_page</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorAccent">@color/engage_message_center_accent</item>
+    </style>
+</resources>

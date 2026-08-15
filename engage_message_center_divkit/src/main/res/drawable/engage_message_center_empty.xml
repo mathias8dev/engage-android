@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/engage_message_center_accent"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="3"
+        android:pathData="M13,18 C13,12.5 17.5,8 23,8 L41,8 C46.5,8 51,12.5 51,18 L51,34 C51,39.5 46.5,44 41,44 L31,44 L21,53 L23,44 C17.5,44 13,39.5 13,34 Z" />
+    <path
+        android:fillColor="@color/engage_message_center_accent"
+        android:pathData="M23,27 m-2,0 a2,2 0,1 0,4 0 a2,2 0,1 0,-4 0 M30,27 m-2,0 a2,2 0,1 0,4 0 a2,2 0,1 0,-4 0 M37,27 m-2,0 a2,2 0,1 0,4 0 a2,2 0,1 0,-4 0" />
+</vector>
