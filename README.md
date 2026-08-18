@@ -3,7 +3,7 @@
 The official native Android SDK for Engage. The repository is a Gradle multi-project build with
 independently consumable artifacts and one atomic release version.
 
-Current release: `2.1.0`.
+Current release: `2.2.0`.
 
 ## Requirements
 
@@ -63,11 +63,11 @@ Then select only the modules required by the application:
 
 ```kotlin
 dependencies {
-    implementation("com.github.mathias8dev.engage-android:engage-android-core:2.1.0")
-    implementation("com.github.mathias8dev.engage-android:engage-android-push-fcm:2.1.0")
-    implementation("com.github.mathias8dev.engage-android:engage-android-in-app:2.1.0")
-    implementation("com.github.mathias8dev.engage-android:engage-android-message-center:2.1.0")
-    implementation("com.github.mathias8dev.engage-android:engage-android-message-center-divkit:2.1.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-core:2.2.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-push-fcm:2.2.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-in-app:2.2.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-message-center:2.2.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-message-center-divkit:2.2.0")
 }
 ```
 
