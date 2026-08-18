@@ -443,7 +443,7 @@ The Core module includes a ready-to-use Preference Center activity:
 ```kotlin
 Engage.preferenceCenter.display()
 // Or open a specific center:
-Engage.preferenceCenter.display("marketing")
+Engage.preferenceCenter.display(PreferenceCenterDisplayOptions(key = "marketing"))
 ```
 
 For custom UI, observe `center()` or `center(key)` and render the returned sections and subscription

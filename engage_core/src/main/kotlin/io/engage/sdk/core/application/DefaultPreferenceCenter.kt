@@ -5,6 +5,7 @@ import android.content.Intent
 import io.engage.sdk.Channel
 import io.engage.sdk.EngageLogger
 import io.engage.sdk.PreferenceCenter
+import io.engage.sdk.PreferenceCenterDisplayOptions
 import io.engage.sdk.PreferenceCenterSnapshot
 import io.engage.sdk.PreferenceSection
 import io.engage.sdk.PrivacyState
@@ -55,11 +56,11 @@ internal class DefaultPreferenceCenter(
         return flowFor(key)
     }
 
-    override fun display() = displayInternal(null)
-
-    override fun display(key: String) {
-        require(CENTER_KEY.matches(key)) { "Preference center keys must match ${CENTER_KEY.pattern}" }
-        displayInternal(key)
+    override fun display(options: PreferenceCenterDisplayOptions) {
+        options.key?.let { key ->
+            require(CENTER_KEY.matches(key)) { "Preference center keys must match ${CENTER_KEY.pattern}" }
+        }
+        displayInternal(options)
     }
 
     private fun flowFor(key: String): StateFlow<PreferenceCenterSnapshot?> = flows.getOrPut(key) {
@@ -90,12 +91,31 @@ internal class DefaultPreferenceCenter(
         }.stateIn(scope, SharingStarted.Eagerly, null)
     }
 
-    private fun displayInternal(key: String?) {
-        EngageLogger.info("Preferences", "display requested key=${key ?: "default"}")
+    private fun displayInternal(options: PreferenceCenterDisplayOptions) {
+        EngageLogger.info("Preferences", "display requested key=${options.key ?: "default"}")
+        val presentation = options.materialTheme
         context.startActivity(
             Intent(context, PreferenceCenterActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                .putExtra(PreferenceCenterActivity.EXTRA_CENTER_KEY, key),
+                .putExtra(PreferenceCenterActivity.EXTRA_CENTER_KEY, options.key)
+                .putExtra(PreferenceCenterActivity.EXTRA_LOCALE, options.localeLanguageTag)
+                .apply {
+                    if (presentation != null) {
+                        putExtra(PreferenceCenterActivity.EXTRA_APPEARANCE, presentation.appearance.name)
+                        putExtra(PreferenceCenterActivity.EXTRA_PRIMARY, presentation.primary)
+                        putExtra(PreferenceCenterActivity.EXTRA_ON_PRIMARY, presentation.onPrimary)
+                        putExtra(PreferenceCenterActivity.EXTRA_PRIMARY_CONTAINER, presentation.primaryContainer)
+                        putExtra(PreferenceCenterActivity.EXTRA_ON_PRIMARY_CONTAINER, presentation.onPrimaryContainer)
+                        putExtra(PreferenceCenterActivity.EXTRA_SURFACE, presentation.surface)
+                        putExtra(PreferenceCenterActivity.EXTRA_SURFACE_CONTAINER_LOW, presentation.surfaceContainerLow)
+                        putExtra(PreferenceCenterActivity.EXTRA_SURFACE_CONTAINER, presentation.surfaceContainer)
+                        putExtra(PreferenceCenterActivity.EXTRA_ON_SURFACE, presentation.onSurface)
+                        putExtra(PreferenceCenterActivity.EXTRA_ON_SURFACE_VARIANT, presentation.onSurfaceVariant)
+                        putExtra(PreferenceCenterActivity.EXTRA_OUTLINE_VARIANT, presentation.outlineVariant)
+                        putExtra(PreferenceCenterActivity.EXTRA_ERROR, presentation.error)
+                        putExtra(PreferenceCenterActivity.EXTRA_ON_ERROR, presentation.onError)
+                    }
+                },
         )
     }
 

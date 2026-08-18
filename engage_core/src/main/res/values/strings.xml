@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="engage_preference_center_title">Communication preferences</string>
+    <string name="engage_preference_center_close">Close communication preferences</string>
+    <string name="engage_preference_center_close_button">Close</string>
+    <string name="engage_preference_center_unavailable_title">No preferences yet</string>
+    <string name="engage_preference_center_unavailable_body">This app hasn’t published any communication preferences yet. You can close this screen and continue using the app.</string>
+</resources>
