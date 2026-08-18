@@ -47,11 +47,14 @@ internal class InboxDivKitView(
     private val actionRouter: InboxActionRouter,
     private val surface: InboxRenderingSurface = InboxRenderingSurface.SUMMARY,
     private val showChrome: Boolean = true,
+    private val onContentVisible: ((InboxEntryId) -> Unit)? = null,
+    private val onRenderError: ((Throwable) -> Unit)? = null,
 ) : FrameLayout(context) {
     private var divView: Div2View? = null
     private var appearanceVariable: Variable.StringVariable? = null
     private var boundEntryId: InboxEntryId? = null
-    private var boundUnread = false
+    private var reportContentVisibility = false
+    private var contentRendered = false
     private var visibilityReported = false
     private val preDrawListener = android.view.ViewTreeObserver.OnPreDrawListener {
         reportVisibilityIfNeeded()
@@ -71,21 +74,30 @@ internal class InboxDivKitView(
             "binding entryId=${item.entry.id} read=${item.entry.readAt != null} " +
                 "rendering=${item.rendering?.let { it::class.simpleName } ?: "loading"}",
         )
-        bindRendering(item.entry.id, item.rendering, item.entry.readAt == null)
+        bindRendering(
+            entryId = item.entry.id,
+            rendering = item.rendering,
+            unread = item.entry.readAt == null,
+            reportVisibility = false,
+        )
     }
 
     fun bindDetail(entryId: InboxEntryId, rendering: RenderingResolution) {
-        bindRendering(entryId, rendering, unread = false)
+        bindRendering(entryId, rendering, unread = false, reportVisibility = true)
     }
 
     private fun bindRendering(
         entryId: InboxEntryId,
         rendering: RenderingResolution?,
         unread: Boolean,
+        reportVisibility: Boolean,
     ) {
-        if (boundEntryId != entryId) visibilityReported = !unread
+        if (boundEntryId != entryId || reportContentVisibility != reportVisibility) {
+            visibilityReported = false
+        }
         boundEntryId = entryId
-        boundUnread = unread
+        reportContentVisibility = reportVisibility
+        contentRendered = false
         divView?.cleanup()
         divView = null
         removeAllViews()
@@ -103,6 +115,7 @@ internal class InboxDivKitView(
                 createDivView(entryId, rendering)
             }.onSuccess { view ->
                 divView = view
+                contentRendered = true
                 addView(
                     view,
                     LayoutParams(
@@ -116,6 +129,7 @@ internal class InboxDivKitView(
                 )
             }.onFailure { error ->
                 EngageLogger.error("MessageCenter.DivKit", "rendering failed entryId=$entryId surface=$surface", error)
+                onRenderError?.invoke(error)
                 addCentered(
                     TextView(context).apply {
                         setText(R.string.engage_message_center_unavailable)
@@ -131,7 +145,9 @@ internal class InboxDivKitView(
     fun recycle() {
         EngageLogger.verbose("MessageCenter.DivKit", "item recycled entryId=$boundEntryId surface=$surface")
         boundEntryId = null
-        boundUnread = false
+        reportContentVisibility = false
+        contentRendered = false
+        visibilityReported = false
         divView?.cleanup()
         divView = null
         removeAllViews()
@@ -189,7 +205,7 @@ internal class InboxDivKitView(
 
     private fun reportVisibilityIfNeeded() {
         val entryId = boundEntryId ?: return
-        if (surface != InboxRenderingSurface.SUMMARY || visibilityReported || !boundUnread) return
+        if (!shouldReportContentVisibility(surface, reportContentVisibility, contentRendered) || visibilityReported) return
         if (!isShown || width <= 0 || height <= 0) return
         val visible = Rect()
         if (!getGlobalVisibleRect(visible)) return
@@ -197,8 +213,11 @@ internal class InboxDivKitView(
         val totalArea = width.toLong() * height.toLong()
         if (totalArea > 0 && visibleArea * 2 >= totalArea) {
             visibilityReported = true
-            EngageLogger.info("MessageCenter.DivKit", "entry visibility threshold reached entryId=$entryId")
-            scope.launch { actionRouter.markOpened(entryId) }
+            EngageLogger.info(
+                "MessageCenter.DivKit",
+                "content visibility threshold reached entryId=$entryId surface=$surface",
+            )
+            onContentVisible?.invoke(entryId)
         }
     }
 
@@ -265,6 +284,12 @@ internal fun messageCenterDivKitAppearanceValue(uiMode: Int): MessageCenterDivKi
     } else {
         MessageCenterDivKitAppearanceValue.SYSTEM_LIGHT
     }
+
+internal fun shouldReportContentVisibility(
+    surface: InboxRenderingSurface,
+    requested: Boolean,
+    rendered: Boolean,
+): Boolean = requested && rendered && surface == InboxRenderingSurface.DETAIL
 
 private class InboxDivActionHandler(
     private val entryId: InboxEntryId,

@@ -54,6 +54,7 @@ internal data class InboxRendering(
     val renderer: InboxRenderer,
     val revision: Long,
     val surfaces: Map<InboxRenderingSurface, JsonObject>,
+    val expiresAt: Instant?,
 )
 
 internal data class CachedInboxWindow(
@@ -67,14 +68,15 @@ internal data class InboxStoreSnapshot(
     val entries: Map<String, RemoteInboxEntry> = emptyMap(),
     val unreadCount: Int = 0,
     val pendingCount: Int = 0,
+    val pendingDeletedEntryIds: Set<String> = emptySet(),
 )
 
 internal interface InboxStore {
     val snapshot: StateFlow<InboxStoreSnapshot>
     suspend fun activateGeneration(generation: Long)
-    suspend fun savePage(generation: Long, pageSize: Int, cursor: String?, page: RemoteInboxPage)
+    suspend fun savePage(generation: Long, pageSize: Int, cursor: String?, page: RemoteInboxPage): Boolean
     suspend fun cachedWindow(generation: Long, pageSize: Int): CachedInboxWindow
-    suspend fun enqueue(mutation: PendingMutation)
+    suspend fun enqueue(mutation: PendingMutation): Boolean
     suspend fun reserve(generation: Long, limit: Int = 100): ReservedMutationBatch?
     suspend fun settle(batch: ReservedMutationBatch, results: List<MutationResult>): List<MutationResult>
     suspend fun clear()

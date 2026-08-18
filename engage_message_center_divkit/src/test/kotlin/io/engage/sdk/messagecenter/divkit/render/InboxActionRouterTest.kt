@@ -7,6 +7,7 @@ import io.engage.sdk.InboxPager
 import io.engage.sdk.InboxPagerState
 import io.engage.sdk.InboxRenderingSnapshot
 import io.engage.sdk.MessageCenterRenderingSupport
+import io.engage.sdk.MessageCenterPresentationState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.runTest
@@ -41,11 +42,13 @@ class InboxActionRouterTest {
     fun `built-in delete never enters the application action registry`() = runTest {
         val inbox = RecordingInbox()
         val support = RecordingRenderingSupport()
-        val router = InboxActionRouter(inbox, support)
+        var invalidated: InboxEntryId? = null
+        val router = InboxActionRouter(inbox, support, onDeleted = { invalidated = it })
 
         assertTrue(router.handle(Uri.parse("engage://delete"), InboxEntryId("entry-2")))
 
         assertEquals(listOf("delete:entry-2"), inbox.operations)
+        assertEquals(InboxEntryId("entry-2"), invalidated)
         assertEquals(null, support.actionName)
     }
 }
@@ -69,6 +72,9 @@ private class RecordingInbox : Inbox {
 private class RecordingRenderingSupport : MessageCenterRenderingSupport {
     var actionName: String? = null
     var arguments: JsonObject? = null
+    override val presentationState = MutableStateFlow(
+        MessageCenterPresentationState(0, 0, true, emptySet()),
+    )
 
     override suspend fun resolveRenderings(entryIds: List<InboxEntryId>): List<InboxRenderingSnapshot> = emptyList()
 

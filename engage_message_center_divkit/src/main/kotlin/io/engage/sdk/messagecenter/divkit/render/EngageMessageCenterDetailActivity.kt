@@ -7,10 +7,8 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.annotation.RestrictTo
@@ -19,22 +17,13 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
-import androidx.lifecycle.lifecycleScope
-import io.engage.sdk.Engage
 import io.engage.sdk.EngageLogger
 import io.engage.sdk.InboxEntryId
-import io.engage.sdk.InboxRenderingSurface
-import io.engage.sdk.messageCenter
-import io.engage.sdk.messagecenter.divkit.EngageMessageCenterDivKitModule
 import io.engage.sdk.messagecenter.divkit.R
-import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
-import kotlinx.coroutines.launch
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public class EngageMessageCenterDetailActivity : ComponentActivity() {
-    private lateinit var renderer: InboxDivKitView
-    private lateinit var progress: ProgressBar
-    private lateinit var error: TextView
+    private lateinit var detailView: EngageMessageCenterDetailView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,43 +34,24 @@ public class EngageMessageCenterDetailActivity : ComponentActivity() {
             finish()
             return
         }
-        val entryId = InboxEntryId(rawEntryId)
-        val runtime = EngageMessageCenterDivKitModule.requireRuntime()
-        val inbox = Engage.messageCenter.inbox
-        renderer = InboxDivKitView(
+        detailView = EngageMessageCenterDetailView(
             this,
-            lifecycleScope,
-            InboxActionRouter(inbox, runtime.renderingSupport()),
-            surface = InboxRenderingSurface.DETAIL,
-            showChrome = false,
+            onError = { error ->
+                EngageLogger.warn(
+                    "MessageCenter.Detail",
+                    "embedded detail error code=${error.code} retryable=${error.isRetryable} message=${error.message}",
+                )
+            },
         )
         setContentView(createContentView())
+        detailView.display(InboxEntryId(rawEntryId))
         val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightNavigationBars =
             nightMode != Configuration.UI_MODE_NIGHT_YES
-        lifecycleScope.launch {
-            inbox.markRead(entryId)
-            val resolution = runtime.repository.cached(listOf(entryId))[entryId]
-                ?: runCatching { runtime.repository.resolve(listOf(entryId))[entryId] }.getOrNull()
-            progress.visibility = View.GONE
-            if (resolution is RenderingResolution.Available) {
-                error.visibility = View.GONE
-                renderer.bindDetail(entryId, resolution)
-                renderer.visibility = View.VISIBLE
-                EngageLogger.info(
-                    "MessageCenter.Detail",
-                    "rendered entryId=$entryId revision=${resolution.snapshot.revision}",
-                )
-            } else {
-                renderer.visibility = View.GONE
-                error.visibility = View.VISIBLE
-                EngageLogger.warn("MessageCenter.Detail", "rendering unavailable entryId=$entryId")
-            }
-        }
     }
 
     override fun onDestroy() {
-        if (::renderer.isInitialized) renderer.recycle()
+        if (::detailView.isInitialized) detailView.close()
         super.onDestroy()
     }
 
@@ -94,29 +64,7 @@ public class EngageMessageCenterDetailActivity : ComponentActivity() {
             insets
         }
         addView(createHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(72)))
-        val content = FrameLayout(context)
-        renderer.visibility = View.GONE
-        content.addView(
-            renderer,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
-        )
-        progress = ProgressBar(context)
-        content.addView(
-            progress,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER),
-        )
-        error = TextView(context).apply {
-            setText(R.string.engage_message_center_unavailable)
-            setTextColor(color(R.color.engage_message_center_text_secondary))
-            textSize = 15f
-            gravity = Gravity.CENTER
-            visibility = View.GONE
-        }
-        content.addView(
-            error,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER),
-        )
-        addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        addView(detailView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
 
     private fun createHeader(): View = LinearLayout(this).apply {

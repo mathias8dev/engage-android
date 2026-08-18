@@ -148,6 +148,7 @@ internal class InboxClient(private val context: EngageModuleContext) {
                             ?: invalidResponse("Rendering ${surface.name} surface is missing")
                     }
                 } ?: invalidResponse("Rendering surfaces are missing"),
+                expiresAt = rendering.instant("expiresAt"),
             )
         }
         if (

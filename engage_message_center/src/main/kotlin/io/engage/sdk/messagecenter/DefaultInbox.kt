@@ -12,6 +12,7 @@ import io.engage.sdk.InboxErrorCode
 import io.engage.sdk.InboxPager
 import io.engage.sdk.InboxPagerState
 import io.engage.sdk.EngageLogger
+import io.engage.sdk.MessageCenterPresentationState
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.messagecenter.data.InboxClient
@@ -42,6 +43,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -63,9 +65,13 @@ internal class DefaultInbox(
     private val clock: Clock = Clock.systemUTC(),
     private val newId: () -> String = { UUID.randomUUID().toString() },
 ) : Inbox {
-    private val enabled = MutableStateFlow(false)
+    private val initialEnabled = context.installationId.value != null &&
+        context.privacy.value == PrivacyState.OPTED_IN &&
+        SdkFeature.MESSAGE_CENTER in context.enabledFeatures.value
+    private val enabled = MutableStateFlow(initialEnabled)
     private val activeGeneration = MutableStateFlow(context.generation.value)
     private val globalError = MutableStateFlow<InboxError?>(null)
+    private val lifecycleRevision = MutableStateFlow(0L)
     private val pagers = CopyOnWriteArraySet<DefaultInboxPager>()
     private val inFlightMutex = Mutex()
     private val inFlightPages = mutableMapOf<PageRequest, Deferred<RemoteInboxPage>>()
@@ -89,7 +95,30 @@ internal class DefaultInbox(
     }.stateIn(
         context.scope,
         SharingStarted.Eagerly,
-        InboxProjectionState(store.snapshot.value, false, null, activeGeneration.value),
+        InboxProjectionState(store.snapshot.value, enabled.value, null, activeGeneration.value),
+    )
+
+    internal val presentationState: StateFlow<MessageCenterPresentationState> = combine(
+        projectionState,
+        lifecycleRevision,
+    ) { projection, revision ->
+        MessageCenterPresentationState(
+            lifecycleRevision = revision,
+            generation = projection.generation,
+            isEnabled = projection.enabled,
+            entryIds = projection.snapshot.entries.keys.mapTo(linkedSetOf(), ::InboxEntryId),
+            deletedEntryIds = projection.snapshot.pendingDeletedEntryIds.mapTo(linkedSetOf(), ::InboxEntryId),
+        )
+    }.stateIn(
+        context.scope,
+        SharingStarted.Eagerly,
+        MessageCenterPresentationState(
+            0,
+            activeGeneration.value,
+            enabled.value,
+            store.snapshot.value.entries.keys.mapTo(linkedSetOf(), ::InboxEntryId),
+            store.snapshot.value.pendingDeletedEntryIds.mapTo(linkedSetOf(), ::InboxEntryId),
+        ),
     )
 
     override val unreadCount: StateFlow<Int> = combine(
@@ -119,15 +148,21 @@ internal class DefaultInbox(
                     "runtime state generation=${runtime.generation} enabled=${runtime.enabled} " +
                         "hasInstallation=${runtime.hasInstallation}",
                 )
+                val wasEnabled = enabled.value
                 if (runtime.hasInstallation) {
                     val changed = activeGeneration.value != runtime.generation ||
                         store.snapshot.value.generation != runtime.generation
+                    if (changed || wasEnabled && !runtime.enabled) {
+                        lifecycleRevision.update { it + 1 }
+                    }
                     activeGeneration.value = runtime.generation
                     store.activateGeneration(runtime.generation)
                     enabled.value = runtime.enabled
                     if (changed) pagers.forEach { it.onGenerationChanged(runtime.generation) }
+                    else if (runtime.enabled && !wasEnabled) pagers.forEach { it.onRuntimeEnabled() }
                     if (runtime.enabled) catchUp()
                 } else {
+                    if (wasEnabled) lifecycleRevision.update { it + 1 }
                     enabled.value = false
                     context.logDebug("MessageCenter.Inbox", "disabled reason=no_installation")
                 }
@@ -139,6 +174,7 @@ internal class DefaultInbox(
                 when (signal) {
                     EngageSignal.AppOpened -> catchUp()
                     EngageSignal.LocalDataWiped -> {
+                        lifecycleRevision.update { it + 1 }
                         enabled.value = false
                         context.logWarn("MessageCenter.Inbox", "local data wipe signal received")
                         store.clear()
@@ -175,15 +211,15 @@ internal class DefaultInbox(
     }
 
     override suspend fun markRead(entryId: InboxEntryId) {
-        val entry = store.snapshot.value.entries[entryId.value] ?: run {
-            context.logDebug("MessageCenter.Inbox", "markRead ignored entryId=$entryId reason=not_found")
-            return
-        }
-        if (entry.readAt != null) {
+        val entry = store.snapshot.value.entries[entryId.value]
+        if (entry?.readAt != null) {
             context.logVerbose("MessageCenter.Inbox", "markRead ignored entryId=$entryId reason=already_read")
             return
         }
-        context.logInfo("MessageCenter.Inbox", "markRead requested entryId=$entryId")
+        context.logInfo(
+            "MessageCenter.Inbox",
+            "markRead requested entryId=$entryId cached=${entry != null}",
+        )
         enqueue(MutationType.MARK_READ, entryId.value)
     }
 
@@ -210,16 +246,16 @@ internal class DefaultInbox(
     }
 
     override suspend fun delete(entryId: InboxEntryId) {
-        if (entryId.value !in store.snapshot.value.entries) {
-            context.logDebug("MessageCenter.Inbox", "delete ignored entryId=$entryId reason=not_found")
-            return
-        }
-        context.logInfo("MessageCenter.Inbox", "delete requested entryId=$entryId")
+        context.logInfo(
+            "MessageCenter.Inbox",
+            "delete requested entryId=$entryId cached=${entryId.value in store.snapshot.value.entries}",
+        )
         enqueue(MutationType.DELETE, entryId.value)
     }
 
     suspend fun wipe() {
         context.logWarn("MessageCenter.Inbox", "wipe started pagers=${pagers.size}")
+        lifecycleRevision.update { it + 1 }
         enabled.value = false
         store.clear()
         pagers.forEach { it.onGenerationChanged(context.generation.value) }
@@ -238,7 +274,7 @@ internal class DefaultInbox(
             "MessageCenter.Inbox",
             "mutation enqueue operationId=$operationId generation=$generation type=$type entryId=$entryId",
         )
-        store.enqueue(
+        val persisted = store.enqueue(
             PendingMutation(
                 operationId = operationId,
                 generation = generation,
@@ -248,6 +284,13 @@ internal class DefaultInbox(
                 batchId = null,
             ),
         )
+        if (!persisted) {
+            context.logWarn(
+                "MessageCenter.Inbox",
+                "mutation discarded operationId=$operationId reason=generation_changed",
+            )
+            return
+        }
         context.scope.launch { flushMutations() }
     }
 
@@ -331,7 +374,9 @@ internal class DefaultInbox(
             } ?: context.scope.async {
                 context.logDebug("MessageCenter.Inbox", "page fetch started generation=$generation")
                 val page = client.page(cursor, pageSize)
-                store.savePage(generation, pageSize, cursor, page)
+                if (!store.savePage(generation, pageSize, cursor, page)) {
+                    throw InboxGenerationChangedException()
+                }
                 context.logDebug(
                     "MessageCenter.Inbox",
                     "page fetch completed generation=$generation entries=${page.entries.size}",
@@ -465,6 +510,15 @@ internal class DefaultInboxPager(
         scope.launch {
             restoreCachedWindow()
             if (inbox.isEnabled()) refresh()
+        }
+    }
+
+    fun onRuntimeEnabled() {
+        if (closed.get()) return
+        EngageLogger.info("MessageCenter.Pager", "runtime enabled pager=$pagerId")
+        scope.launch {
+            restoreCachedWindow()
+            refresh()
         }
     }
 

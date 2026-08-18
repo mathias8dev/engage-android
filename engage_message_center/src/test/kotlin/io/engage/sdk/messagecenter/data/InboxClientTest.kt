@@ -75,6 +75,7 @@ class InboxClientTest {
         assertEquals("entry-1", rendering.entryId)
         assertEquals(InboxRenderer.DIVKIT, rendering.renderer)
         assertEquals(2, rendering.revision)
+        assertEquals(Instant.parse("2099-01-01T00:00:00Z"), rendering.expiresAt)
         assertEquals(
             setOf(InboxRenderingSurface.SUMMARY, InboxRenderingSurface.DETAIL),
             rendering.surfaces.keys,
@@ -133,7 +134,7 @@ class InboxClientTest {
         const val RENDERING = """
             {
               "renderings":[{
-                "entryId":"entry-1","renderer":"DIVKIT","revision":2,
+                "entryId":"entry-1","renderer":"DIVKIT","revision":2,"expiresAt":"2099-01-01T00:00:00Z",
                 "surfaces":{
                   "SUMMARY":{"card":{"log_id":"inbox-entry-1-summary","states":[]}},
                   "DETAIL":{"card":{"log_id":"inbox-entry-1-detail","states":[]}}

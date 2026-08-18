@@ -82,14 +82,26 @@ public data class InboxRenderingSnapshot(
     val renderer: InboxRenderer,
     val revision: Long,
     val surfaces: Map<InboxRenderingSurface, JsonObject>,
+    val expiresAt: Instant? = null,
 ) {
     public fun requireSurface(surface: InboxRenderingSurface): JsonObject =
         requireNotNull(surfaces[surface]) { "Inbox rendering is missing ${surface.name}" }
 }
 
+/** Identity-scoped Inbox state consumed by official rendering artifacts. */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public data class MessageCenterPresentationState(
+    val lifecycleRevision: Long,
+    val generation: Long,
+    val isEnabled: Boolean,
+    val entryIds: Set<InboxEntryId>,
+    val deletedEntryIds: Set<InboxEntryId> = emptySet(),
+)
+
 /** Internal bridge consumed only by official Message Center UI artifacts. */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public interface MessageCenterRenderingSupport {
+    public val presentationState: StateFlow<MessageCenterPresentationState>
     public suspend fun resolveRenderings(entryIds: List<InboxEntryId>): List<InboxRenderingSnapshot>
     public suspend fun executeAction(name: String, arguments: JsonObject): Boolean
 }

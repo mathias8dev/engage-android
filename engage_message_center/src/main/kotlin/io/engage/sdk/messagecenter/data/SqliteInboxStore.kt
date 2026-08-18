@@ -38,6 +38,7 @@ internal class SqliteInboxStore(
     private val mutex = Mutex()
     private val mutableSnapshot = MutableStateFlow(InboxStoreSnapshot())
     private var activeGeneration: Long? = null
+    private var generationBoundaryEstablished = false
     override val snapshot: StateFlow<InboxStoreSnapshot> = mutableSnapshot.asStateFlow()
 
     override fun onCreate(database: SQLiteDatabase) {
@@ -121,6 +122,7 @@ internal class SqliteInboxStore(
             }
         }
         activeGeneration = generation
+        generationBoundaryEstablished = true
         publishLocked(generation)
         EngageLogger.info("MessageCenter.Store", "generation active generation=$generation")
     }
@@ -130,7 +132,14 @@ internal class SqliteInboxStore(
         pageSize: Int,
         cursor: String?,
         page: RemoteInboxPage,
-    ) = mutex.withLock {
+    ): Boolean = mutex.withLock {
+        if (!accepts(generation)) {
+            EngageLogger.warn(
+                "MessageCenter.Store",
+                "page discarded generation=$generation active=$activeGeneration",
+            )
+            return@withLock false
+        }
         EngageLogger.debug(
             "MessageCenter.Store",
             "page saving generation=$generation pageSize=$pageSize hasCursor=${cursor != null} " +
@@ -181,6 +190,7 @@ internal class SqliteInboxStore(
         }
         publishIfActiveLocked(generation)
         EngageLogger.debug("MessageCenter.Store", "page saved generation=$generation entries=${page.entries.size}")
+        true
     }
 
     override suspend fun cachedWindow(generation: Long, pageSize: Int): CachedInboxWindow = mutex.withLock {
@@ -225,7 +235,15 @@ internal class SqliteInboxStore(
         }
     }
 
-    override suspend fun enqueue(mutation: PendingMutation) = mutex.withLock {
+    override suspend fun enqueue(mutation: PendingMutation): Boolean = mutex.withLock {
+        if (!accepts(mutation.generation)) {
+            EngageLogger.warn(
+                "MessageCenter.Store",
+                "mutation discarded operationId=${mutation.operationId} generation=${mutation.generation} " +
+                    "active=$activeGeneration",
+            )
+            return@withLock false
+        }
         EngageLogger.debug(
             "MessageCenter.Store",
             "mutation persisting operationId=${mutation.operationId} generation=${mutation.generation} " +
@@ -246,6 +264,7 @@ internal class SqliteInboxStore(
         )
         publishIfActiveLocked(mutation.generation)
         EngageLogger.debug("MessageCenter.Store", "mutation persisted operationId=${mutation.operationId}")
+        true
     }
 
     override suspend fun reserve(generation: Long, limit: Int): ReservedMutationBatch? = mutex.withLock {
@@ -297,6 +316,14 @@ internal class SqliteInboxStore(
         batch: ReservedMutationBatch,
         results: List<MutationResult>,
     ): List<MutationResult> = mutex.withLock {
+        if (!accepts(batch.generation)) {
+            EngageLogger.warn(
+                "MessageCenter.Store",
+                "mutation settlement discarded batchId=${batch.batchId} generation=${batch.generation} " +
+                    "active=$activeGeneration",
+            )
+            return@withLock emptyList()
+        }
         EngageLogger.debug(
             "MessageCenter.Store",
             "mutation batch settling batchId=${batch.batchId} results=${results.size}",
@@ -333,7 +360,14 @@ internal class SqliteInboxStore(
         }
         mutableSnapshot.value = InboxStoreSnapshot()
         activeGeneration = null
+        generationBoundaryEstablished = true
         EngageLogger.warn("MessageCenter.Store", "all local inbox data cleared")
+    }
+
+    private fun accepts(generation: Long): Boolean = when (val active = activeGeneration) {
+        generation -> true
+        null -> !generationBoundaryEstablished
+        else -> false
     }
 
     private fun SQLiteDatabase.upsertEntry(generation: Long, entry: RemoteInboxEntry) {
@@ -442,7 +476,16 @@ internal class SqliteInboxStore(
                 }
             }
         }
-        mutableSnapshot.value = InboxStoreSnapshot(generation, entries, unreadCount, pending.size)
+        mutableSnapshot.value = InboxStoreSnapshot(
+            generation = generation,
+            entries = entries,
+            unreadCount = unreadCount,
+            pendingCount = pending.size,
+            pendingDeletedEntryIds = pending.asSequence()
+                .filter { it.type == MutationType.DELETE }
+                .mapNotNull(PendingMutation::entryId)
+                .toSet(),
+        )
         EngageLogger.verbose(
             "MessageCenter.Store",
             "snapshot published generation=$generation entries=${entries.size} unread=$unreadCount pending=${pending.size}",

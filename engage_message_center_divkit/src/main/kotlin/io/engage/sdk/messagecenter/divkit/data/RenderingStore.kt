@@ -13,6 +13,7 @@ import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import java.time.Instant
 
 internal class RenderingStore(
     context: Context,
@@ -42,6 +43,7 @@ internal class RenderingStore(
                 renderer TEXT,
                 revision INTEGER,
                 surfaces TEXT,
+                expires_at TEXT,
                 PRIMARY KEY (generation, entry_id)
             )
             """.trimIndent(),
@@ -76,7 +78,7 @@ internal class RenderingStore(
             val arguments = arrayOf(generation.toString()) + chunk.map { it.value }
             readableDatabase.query(
                 "inbox_renderings",
-                arrayOf("entry_id", "available", "renderer", "revision", "surfaces"),
+                arrayOf("entry_id", "available", "renderer", "revision", "surfaces", "expires_at"),
                 "generation = ? AND entry_id IN ($placeholders)",
                 arguments,
                 null,
@@ -88,6 +90,19 @@ internal class RenderingStore(
                     if (cursor.getInt(1) == 0) {
                         result[entryId] = RenderingResolution.Unavailable(entryId)
                     } else {
+                        val expiresAt = cursor.getString(5)?.let(Instant::parse)
+                        if (expiresAt?.isAfter(Instant.now()) == false) {
+                            EngageLogger.info(
+                                "MessageCenter.RenderingStore",
+                                "expired rendering evicted entryId=$entryId generation=$generation",
+                            )
+                            writableDatabase.delete(
+                                "inbox_renderings",
+                                "generation = ? AND entry_id = ?",
+                                arrayOf(generation.toString(), entryId.value),
+                            )
+                            continue
+                        }
                         val resolution = runCatching {
                             RenderingResolution.Available(
                                 InboxRenderingSnapshot(
@@ -99,6 +114,7 @@ internal class RenderingStore(
                                             requireNotNull(surfaces[surface.name]) { "Missing ${surface.name}" }.jsonObject
                                         }
                                     },
+                                    expiresAt = expiresAt,
                                 ),
                             )
                         }.getOrNull()
@@ -152,12 +168,15 @@ internal class RenderingStore(
                                         resolution.snapshot.surfaces.mapKeys { (surface, _) -> surface.name },
                                     ).toString(),
                                 )
+                                resolution.snapshot.expiresAt?.let { put("expires_at", it.toString()) }
+                                    ?: putNull("expires_at")
                             }
                             is RenderingResolution.Unavailable -> {
                                 put("available", 0)
                                 putNull("renderer")
                                 putNull("revision")
                                 putNull("surfaces")
+                                putNull("expires_at")
                             }
                         }
                     },
@@ -179,7 +198,7 @@ internal class RenderingStore(
 
     private companion object {
         const val DATABASE_NAME = "engage_message_center_divkit.db"
-        const val DATABASE_VERSION = 2
+        const val DATABASE_VERSION = 3
         const val MAX_SQL_ARGUMENTS = 900
     }
 }

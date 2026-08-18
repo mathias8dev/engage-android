@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonObject
 internal class DefaultMessageCenter(private val context: EngageModuleContext) : MessageCenter, MessageCenterRenderingSupport {
     private val client = InboxClient(context)
     override val inbox: Inbox = DefaultInbox(context, client = client)
+    override val presentationState = (inbox as DefaultInbox).presentationState
 
     init {
         context.logInfo("MessageCenter", "initialized generation=${context.generation.value}")
@@ -25,6 +26,7 @@ internal class DefaultMessageCenter(private val context: EngageModuleContext) : 
                 rendering.renderer,
                 rendering.revision,
                 rendering.surfaces,
+                rendering.expiresAt,
             )
         }
             .also { context.logInfo("MessageCenter", "renderings resolved count=${it.size}") }

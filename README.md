@@ -440,13 +440,34 @@ Add `engage-android-message-center` for the headless inbox. Add
 
 ```kotlin
 Engage.messageCenter.display()
+Engage.messageCenter.display(entryId = entry.id)
 ```
 
 Each published locale contains a compact `SUMMARY` surface and a full `DETAIL` surface. The ready-made
 activity renders `SUMMARY` in the inbox, then opens a native detail screen and renders `DETAIL` when
 the row is selected. The template owns the message content; the SDK owns the navigation chrome and
-marks the entry read. Both surfaces are immutable snapshots of the same headless payload and template
+marks the entry read only after `DETAIL` is actually visible. Both surfaces are immutable snapshots of the same headless payload and template
 revision.
+
+Applications that own their navigation can embed the same native content without launching an
+Activity:
+
+```kotlin
+val list = EngageMessageCenterListView(
+    context,
+    onEntryTap = { entry -> router.openMessage(entry.id) },
+)
+
+val detail = EngageMessageCenterDetailView(
+    context,
+    onUnavailable = router::closeMissingMessage,
+).apply {
+    display(entry.id)
+}
+```
+
+Both views must be closed with their host lifecycle. They contain no toolbar or navigation and share
+the same Inbox store, rendering cache, DivKit runtime, and action router as `display()`.
 
 The headless API supports custom Compose or View-system inboxes:
 
