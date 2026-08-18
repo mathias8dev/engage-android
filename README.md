@@ -471,6 +471,7 @@ Activity:
 ```kotlin
 val list = EngageMessageCenterListView(
     context,
+    sortOrder = InboxSortOrder.NEWEST_FIRST,
     onEntryTap = { entry -> router.openMessage(entry.id) },
 )
 
@@ -484,11 +485,24 @@ val detail = EngageMessageCenterDetailView(
 
 Both views must be closed with their host lifecycle. They contain no toolbar or navigation and share
 the same Inbox store, rendering cache, DivKit runtime, and action router as `display()`.
+The list header presents the synchronized message and unread counts above a compact All/Unread
+segmented filter; bulk read mutations remain available through the headless Inbox API.
+The ready-made list also owns the standard destructive interaction: swipe a message toward the
+start edge, then confirm deletion in a native Material 3 dialog. The dialog consumes the same
+`MessageCenterMaterialTheme` roles as the list (`surfaceContainer`, `onSurface`, `onSurfaceVariant`,
+`primary`, and `error`); it never falls back to a technical Activity theme. Only the explicit destructive
+action enqueues the durable Inbox mutation and removes the entry optimistically from every active
+subscriber. Custom inboxes keep the same mutation available through `Inbox.delete`.
 
 The headless API supports custom Compose or View-system inboxes:
 
 ```kotlin
-private val inboxPager by lazy { Engage.messageCenter.inbox.pager(pageSize = 20) }
+private val inboxPager by lazy {
+    Engage.messageCenter.inbox.pager(
+        pageSize = 20,
+        sortOrder = InboxSortOrder.NEWEST_FIRST,
+    )
+}
 
 override fun onStart() {
     super.onStart()
@@ -507,7 +521,7 @@ override fun onDestroy() {
 ```
 
 Use `unreadCount`, `markRead`, `markUnread`, `markAllRead`, and `delete` for host-owned badges and
-interactions.
+interactions. Sorting is server-side on `sentAt`; each sort order owns a separate cursor window.
 
 ## Feature flags
 

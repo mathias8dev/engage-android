@@ -19,7 +19,7 @@ class MessageCenterUiModelTest {
 
         assertEquals(MessageCenterEmptyKind.INBOX, model.emptyKind)
         assertFalse(model.showFilters)
-        assertFalse(model.showMarkAllRead)
+        assertEquals(0, model.messageCount)
         assertFalse(model.showProgress)
     }
 
@@ -32,9 +32,9 @@ class MessageCenterUiModelTest {
         val model = model(state, filter = InboxViewFilter.UNREAD, unreadCount = 1)
 
         assertEquals(listOf("unread"), model.items.map { it.entry.id.value })
+        assertEquals(2, model.messageCount)
         assertEquals(1, model.unreadCount)
         assertTrue(model.showFilters)
-        assertTrue(model.showMarkAllRead)
     }
 
     @Test

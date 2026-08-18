@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="engage_message_center_filter_all">Tous</string>
+    <string name="engage_message_center_filter_unread">Non lus</string>
+    <string name="engage_message_center_header_summary">%1$s · %2$s</string>
+    <plurals name="engage_message_center_unread_count">
+        <item quantity="one">%d non lu</item>
+        <item quantity="other">%d non lus</item>
+    </plurals>
+    <plurals name="engage_message_center_message_count">
+        <item quantity="one">%d message</item>
+        <item quantity="other">%d messages</item>
+    </plurals>
+</resources>

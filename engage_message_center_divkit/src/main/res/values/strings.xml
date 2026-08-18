@@ -3,9 +3,9 @@
     <string name="engage_message_center_title">Messages</string>
     <string name="engage_message_center_detail_title">Message</string>
     <string name="engage_message_center_back">Back</string>
-    <string name="engage_message_center_mark_all_read">Mark all read</string>
     <string name="engage_message_center_filter_all">All</string>
     <string name="engage_message_center_filter_unread">Unread</string>
+    <string name="engage_message_center_header_summary">%1$s · %2$s</string>
     <string name="engage_message_center_empty_title">You\'re all caught up</string>
     <string name="engage_message_center_empty_body">Important updates and messages will appear here.</string>
     <string name="engage_message_center_no_unread_title">No unread messages</string>
@@ -16,8 +16,16 @@
     <string name="engage_message_center_rendering_retry">Some messages couldn\'t be displayed. Pull to retry.</string>
     <string name="engage_message_center_unavailable">This message cannot be displayed.</string>
     <string name="engage_message_center_unread">Unread message</string>
+    <string name="engage_message_center_delete">Delete</string>
+    <string name="engage_message_center_delete_title">Delete this message?</string>
+    <string name="engage_message_center_delete_body">It will be removed from your Message Center on every synchronized device.</string>
+    <string name="engage_message_center_delete_failed">This message could not be deleted. Try again.</string>
     <plurals name="engage_message_center_unread_count">
         <item quantity="one">%d unread</item>
         <item quantity="other">%d unread</item>
+    </plurals>
+    <plurals name="engage_message_center_message_count">
+        <item quantity="one">%d message</item>
+        <item quantity="other">%d messages</item>
     </plurals>
 </resources>

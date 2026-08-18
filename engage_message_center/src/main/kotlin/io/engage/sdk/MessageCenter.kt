@@ -45,6 +45,11 @@ public data class InboxPagerState(
     val error: InboxError? = null,
 )
 
+public enum class InboxSortOrder {
+    NEWEST_FIRST,
+    OLDEST_FIRST,
+}
+
 public interface InboxPager : AutoCloseable {
     val state: StateFlow<InboxPagerState>
     suspend fun refresh()
@@ -54,7 +59,7 @@ public interface InboxPager : AutoCloseable {
 
 public interface Inbox {
     val unreadCount: StateFlow<Int>
-    fun pager(pageSize: Int = 20): InboxPager
+    fun pager(pageSize: Int = 20, sortOrder: InboxSortOrder = InboxSortOrder.NEWEST_FIRST): InboxPager
     suspend fun markRead(entryId: InboxEntryId)
     suspend fun markUnread(entryId: InboxEntryId)
     suspend fun markAllRead()

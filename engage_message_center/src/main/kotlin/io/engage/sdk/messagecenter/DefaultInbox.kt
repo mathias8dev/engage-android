@@ -11,6 +11,7 @@ import io.engage.sdk.InboxError
 import io.engage.sdk.InboxErrorCode
 import io.engage.sdk.InboxPager
 import io.engage.sdk.InboxPagerState
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.EngageLogger
 import io.engage.sdk.MessageCenterPresentationState
 import io.engage.sdk.PrivacyState
@@ -200,10 +201,10 @@ internal class DefaultInbox(
         }
     }
 
-    override fun pager(pageSize: Int): InboxPager {
+    override fun pager(pageSize: Int, sortOrder: InboxSortOrder): InboxPager {
         require(pageSize in 1..100) { "Inbox pageSize must be between 1 and 100" }
-        context.logInfo("MessageCenter.Inbox", "pager creating pageSize=$pageSize")
-        return DefaultInboxPager(this, pageSize, context.scope).also { pager ->
+        context.logInfo("MessageCenter.Inbox", "pager creating pageSize=$pageSize sortOrder=$sortOrder")
+        return DefaultInboxPager(this, pageSize, sortOrder, context.scope).also { pager ->
             pagers += pager
             context.logDebug("MessageCenter.Inbox", "pager registered activePagers=${pagers.size}")
             pager.initialize()
@@ -309,7 +310,7 @@ internal class DefaultInbox(
         val generation = activeGeneration.value
         context.logDebug("MessageCenter.Inbox", "unread refresh started generation=$generation")
         try {
-            fetchPage(generation, DEFAULT_PAGE_SIZE, null)
+            fetchPage(generation, DEFAULT_PAGE_SIZE, null, InboxSortOrder.NEWEST_FIRST)
             clearRetryableGlobalError()
             context.logInfo("MessageCenter.Inbox", "unread refresh completed generation=$generation")
         } catch (error: Throwable) {
@@ -361,9 +362,14 @@ internal class DefaultInbox(
         context.logDebug("MessageCenter.Inbox", "mutation flush completed generation=$generation")
     }
 
-    internal suspend fun fetchPage(generation: Long, pageSize: Int, cursor: String?): RemoteInboxPage {
+    internal suspend fun fetchPage(
+        generation: Long,
+        pageSize: Int,
+        cursor: String?,
+        sortOrder: InboxSortOrder,
+    ): RemoteInboxPage {
         check(enabled.value) { "Engage Message Center is disabled" }
-        val key = PageRequest(generation, pageSize, cursor)
+        val key = PageRequest(generation, pageSize, cursor, sortOrder)
         context.logDebug(
             "MessageCenter.Inbox",
             "page fetch requested generation=$generation pageSize=$pageSize hasCursor=${cursor != null}",
@@ -373,8 +379,8 @@ internal class DefaultInbox(
                 context.logVerbose("MessageCenter.Inbox", "page fetch coalesced generation=$generation")
             } ?: context.scope.async {
                 context.logDebug("MessageCenter.Inbox", "page fetch started generation=$generation")
-                val page = client.page(cursor, pageSize)
-                if (!store.savePage(generation, pageSize, cursor, page)) {
+                val page = client.page(cursor, pageSize, sortOrder)
+                if (!store.savePage(generation, pageSize, cursor, page, sortOrder)) {
                     throw InboxGenerationChangedException()
                 }
                 context.logDebug(
@@ -397,8 +403,8 @@ internal class DefaultInbox(
         return deferred.await()
     }
 
-    internal suspend fun cachedWindow(pageSize: Int): CachedInboxWindow =
-        store.cachedWindow(activeGeneration.value, pageSize)
+    internal suspend fun cachedWindow(pageSize: Int, sortOrder: InboxSortOrder): CachedInboxWindow =
+        store.cachedWindow(activeGeneration.value, pageSize, sortOrder)
 
     internal fun project(window: PagerWindow): InboxPagerState {
         val snapshot = store.snapshot.value
@@ -447,7 +453,12 @@ internal class DefaultInbox(
     }
 
     private data class RuntimeState(val generation: Long, val enabled: Boolean, val hasInstallation: Boolean)
-    private data class PageRequest(val generation: Long, val pageSize: Int, val cursor: String?)
+    private data class PageRequest(
+        val generation: Long,
+        val pageSize: Int,
+        val cursor: String?,
+        val sortOrder: InboxSortOrder,
+    )
 
     private companion object {
         const val DEFAULT_PAGE_SIZE = 20
@@ -474,6 +485,7 @@ internal data class PagerWindow(
 internal class DefaultInboxPager(
     private val inbox: DefaultInbox,
     private val pageSize: Int,
+    private val sortOrder: InboxSortOrder,
     parentScope: CoroutineScope,
 ) : InboxPager {
     private val pagerId = Integer.toHexString(System.identityHashCode(this))
@@ -542,7 +554,7 @@ internal class DefaultInboxPager(
             var hasMore: Boolean
             do {
                 if (!visited.add(cursor)) throw InboxInvalidResponseException("Inbox cursor loop detected")
-                val page = inbox.fetchPage(generation, pageSize, cursor)
+                val page = inbox.fetchPage(generation, pageSize, cursor, sortOrder)
                 page.entries.forEach { ids += it.id }
                 cursor = page.nextCursor
                 hasMore = page.hasMore
@@ -579,7 +591,7 @@ internal class DefaultInboxPager(
         window.value = window.value.copy(isLoadingMore = true, error = null)
         EngageLogger.debug("MessageCenter.Pager", "load next started pager=$pagerId generation=$generation")
         try {
-            val page = inbox.fetchPage(generation, pageSize, cursor)
+            val page = inbox.fetchPage(generation, pageSize, cursor, sortOrder)
             if (inbox.generation() != generation) throw InboxGenerationChangedException()
             window.value = PagerWindow(
                 generation = generation,
@@ -612,7 +624,7 @@ internal class DefaultInboxPager(
     private suspend fun restoreCachedWindow() {
         val generation = inbox.generation()
         EngageLogger.debug("MessageCenter.Pager", "cache restore started pager=$pagerId generation=$generation")
-        val cached = inbox.cachedWindow(pageSize)
+        val cached = inbox.cachedWindow(pageSize, sortOrder)
         if (!closed.get() && inbox.generation() == generation) {
             window.value = PagerWindow(generation, cached.entryIds, cached.nextCursor, cached.hasMore)
             EngageLogger.info(

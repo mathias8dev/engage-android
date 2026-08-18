@@ -6,6 +6,7 @@ import io.engage.sdk.InboxEntryId
 import io.engage.sdk.InboxPager
 import io.engage.sdk.InboxPagerState
 import io.engage.sdk.InboxRenderingSnapshot
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.MessageCenterRenderingSupport
 import io.engage.sdk.MessageCenterPresentationState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,7 +58,7 @@ private class RecordingInbox : Inbox {
     override val unreadCount: StateFlow<Int> = MutableStateFlow(0)
     val operations = mutableListOf<String>()
 
-    override fun pager(pageSize: Int): InboxPager = object : InboxPager {
+    override fun pager(pageSize: Int, sortOrder: InboxSortOrder): InboxPager = object : InboxPager {
         override val state: StateFlow<InboxPagerState> = MutableStateFlow(InboxPagerState())
         override suspend fun refresh() = Unit
         override suspend fun loadNextPage() = Unit

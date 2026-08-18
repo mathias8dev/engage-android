@@ -3,6 +3,7 @@ package io.engage.sdk.messagecenter.domain
 import kotlinx.serialization.json.JsonObject
 import io.engage.sdk.InboxRenderer
 import io.engage.sdk.InboxRenderingSurface
+import io.engage.sdk.InboxSortOrder
 import java.time.Instant
 import kotlinx.coroutines.flow.StateFlow
 
@@ -74,8 +75,18 @@ internal data class InboxStoreSnapshot(
 internal interface InboxStore {
     val snapshot: StateFlow<InboxStoreSnapshot>
     suspend fun activateGeneration(generation: Long)
-    suspend fun savePage(generation: Long, pageSize: Int, cursor: String?, page: RemoteInboxPage): Boolean
-    suspend fun cachedWindow(generation: Long, pageSize: Int): CachedInboxWindow
+    suspend fun savePage(
+        generation: Long,
+        pageSize: Int,
+        cursor: String?,
+        page: RemoteInboxPage,
+        sortOrder: InboxSortOrder = InboxSortOrder.NEWEST_FIRST,
+    ): Boolean
+    suspend fun cachedWindow(
+        generation: Long,
+        pageSize: Int,
+        sortOrder: InboxSortOrder = InboxSortOrder.NEWEST_FIRST,
+    ): CachedInboxWindow
     suspend fun enqueue(mutation: PendingMutation): Boolean
     suspend fun reserve(generation: Long, limit: Int = 100): ReservedMutationBatch?
     suspend fun settle(batch: ReservedMutationBatch, results: List<MutationResult>): List<MutationResult>

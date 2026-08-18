@@ -2,6 +2,7 @@ package io.engage.sdk.messagecenter.data
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.messagecenter.domain.InboxScope
 import io.engage.sdk.messagecenter.domain.MutationResult
 import io.engage.sdk.messagecenter.domain.MutationStatus
@@ -87,6 +88,34 @@ class SqliteInboxStoreTest {
         assertEquals(setOf("new"), store.snapshot.value.entries.keys)
         assertEquals(listOf("new"), store.cachedWindow(8, 20).entryIds)
         assertTrue(store.cachedWindow(7, 20).entryIds.isEmpty())
+    }
+
+    @Test
+    fun `cached windows are isolated by sort order`() = runTest {
+        store.activateGeneration(7)
+        store.savePage(
+            7,
+            20,
+            null,
+            page(entry("newest", read = false)),
+            InboxSortOrder.NEWEST_FIRST,
+        )
+        store.savePage(
+            7,
+            20,
+            null,
+            page(entry("oldest", read = false)),
+            InboxSortOrder.OLDEST_FIRST,
+        )
+
+        assertEquals(
+            listOf("newest"),
+            store.cachedWindow(7, 20, InboxSortOrder.NEWEST_FIRST).entryIds,
+        )
+        assertEquals(
+            listOf("oldest"),
+            store.cachedWindow(7, 20, InboxSortOrder.OLDEST_FIRST).entryIds,
+        )
     }
 
     @Test

@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import io.engage.sdk.EngageConfig
 import io.engage.sdk.InboxRenderer
 import io.engage.sdk.InboxRenderingSurface
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.messagecenter.domain.MutationType
@@ -45,7 +46,22 @@ class InboxClientTest {
         assertEquals("order.shipped", page.entries.single().key)
         assertEquals("42", page.entries.single().payload["orderId"].toString().trim('"'))
         assertEquals(3, page.unreadCount)
-        assertEquals(mapOf("pageSize" to "20", "cursor" to "next/+"), context.request?.query)
+        assertEquals(
+            mapOf("pageSize" to "20", "sortOrder" to "NEWEST_FIRST", "cursor" to "next/+"),
+            context.request?.query,
+        )
+    }
+
+    @Test
+    fun `page forwards oldest first ordering`() = runTest {
+        val context = ClientContext(this).apply { response = response(PAGE) }
+
+        InboxClient(context).page(cursor = null, pageSize = 10, sortOrder = InboxSortOrder.OLDEST_FIRST)
+
+        assertEquals(
+            mapOf("pageSize" to "10", "sortOrder" to "OLDEST_FIRST"),
+            context.request?.query,
+        )
     }
 
     @Test

@@ -1,8 +1,11 @@
 package io.engage.sdk.messagecenter.divkit.render
 
+import android.app.Dialog
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -16,6 +19,8 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.DrawableCompat
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
@@ -25,10 +30,13 @@ import io.engage.sdk.InboxEntry
 import io.engage.sdk.InboxEntryId
 import io.engage.sdk.InboxPagerState
 import io.engage.sdk.InboxPager
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.messageCenter
 import io.engage.sdk.messagecenter.divkit.EngageMessageCenterDivKitModule
 import io.engage.sdk.messagecenter.divkit.MessageCenterViewError
 import io.engage.sdk.messagecenter.divkit.MessageCenterViewErrorCode
+import io.engage.sdk.messagecenter.divkit.MessageCenterMaterialTheme
+import io.engage.sdk.messagecenter.divkit.MessageCenterViewLayout
 import io.engage.sdk.messagecenter.divkit.R
 import io.engage.sdk.messagecenter.divkit.data.RenderingGenerationChangedException
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
@@ -50,9 +58,12 @@ import kotlinx.coroutines.launch
 public class EngageMessageCenterListView(
     context: Context,
     pageSize: Int = DEFAULT_PAGE_SIZE,
+    private val sortOrder: InboxSortOrder = InboxSortOrder.NEWEST_FIRST,
     public var onEntryTap: ((InboxEntry) -> Unit)? = null,
     public var onError: ((MessageCenterViewError) -> Unit)? = null,
     startImmediately: Boolean = true,
+    private val materialTheme: MessageCenterMaterialTheme = MessageCenterMaterialTheme.defaults(context),
+    private val layout: MessageCenterViewLayout = MessageCenterViewLayout(),
 ) : LinearLayout(context), AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val runtime = EngageMessageCenterDivKitModule.requireRuntime()
@@ -62,13 +73,15 @@ public class EngageMessageCenterListView(
     private val adapter = InboxAdapter(
         scope,
         InboxActionRouter(inbox, runtime.renderingSupport()),
+        materialTheme,
+        layout,
     ) { item -> onEntryTap?.invoke(item.entry) }
     private val recyclerView: RecyclerView
     private val swipeRefresh: SwipeRefreshLayout
     private val filterBar: View
+    private lateinit var headerSummary: TextView
     private lateinit var allFilter: TextView
     private lateinit var unreadFilter: TextView
-    private lateinit var markAllRead: TextView
     private val emptyState: LinearLayout
     private lateinit var emptyTitle: TextView
     private lateinit var emptyBody: TextView
@@ -83,21 +96,28 @@ public class EngageMessageCenterListView(
     private var closed = false
     private var started = false
     private var lastReportedError: String? = null
+    private var deleteDialog: Dialog? = null
+    private var deleteConfirmationJob: Job? = null
 
     init {
         require(pageSize in 1..100) { "Inbox pageSize must be between 1 and 100" }
         orientation = VERTICAL
-        setBackgroundColor(color(R.color.engage_message_center_page))
+        setBackgroundColor(materialTheme.surface)
 
         filterBar = createFilterBar().also {
-            addView(it, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(72)))
+            addView(it, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         errorBanner = TextView(context).apply {
             visibility = View.GONE
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(10), dp(16), dp(10))
-            setTextColor(color(R.color.engage_message_center_text))
-            setBackgroundColor(color(R.color.engage_message_center_accent_soft))
+            setPadding(
+                dp(this@EngageMessageCenterListView.layout.horizontalPaddingDp),
+                dp(10),
+                dp(this@EngageMessageCenterListView.layout.horizontalPaddingDp),
+                dp(10),
+            )
+            setTextColor(materialTheme.onSurface)
+            setBackgroundColor(materialTheme.primaryContainer)
             textSize = 13f
         }.also {
             addView(it, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -108,14 +128,29 @@ public class EngageMessageCenterListView(
             layoutManager = LinearLayoutManager(context)
             adapter = this@EngageMessageCenterListView.adapter
             clipToPadding = false
-            setPadding(dp(16), dp(4), dp(16), dp(24))
-            addItemDecoration(InboxSpacingDecoration(dp(12)))
+            setPadding(
+                dp(this@EngageMessageCenterListView.layout.horizontalPaddingDp),
+                dp(4),
+                dp(this@EngageMessageCenterListView.layout.horizontalPaddingDp),
+                dp(24),
+            )
+            addItemDecoration(
+                InboxSpacingDecoration(dp(this@EngageMessageCenterListView.layout.itemSpacingDp)),
+            )
             addOnScrollListener(object : RecyclerView.OnScrollListener() {
                 override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                     requestNextPageIfNeeded()
                 }
             })
         }
+        ItemTouchHelper(
+            InboxDeleteSwipeCallback(
+                context = context,
+                adapter = adapter,
+                materialTheme = materialTheme,
+                onDeleteRequested = ::requestDelete,
+            ),
+        ).attachToRecyclerView(recyclerView)
         content.addView(
             recyclerView,
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
@@ -130,7 +165,9 @@ public class EngageMessageCenterListView(
                 ),
             )
         }
-        progress = ProgressBar(context).also {
+        progress = ProgressBar(context).apply {
+            indeterminateTintList = ColorStateList.valueOf(materialTheme.primary)
+        }.also {
             content.addView(
                 it,
                 FrameLayout.LayoutParams(
@@ -141,7 +178,7 @@ public class EngageMessageCenterListView(
             )
         }
         swipeRefresh = SwipeRefreshLayout(context).apply {
-            setColorSchemeColors(color(R.color.engage_message_center_accent))
+            setColorSchemeColors(materialTheme.primary)
             addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             setOnRefreshListener(::refresh)
         }.also { addView(it, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)) }
@@ -155,7 +192,7 @@ public class EngageMessageCenterListView(
         check(!closed) { "EngageMessageCenterListView is closed" }
         if (started) return
         started = true
-        pager = inbox.pager(pageSize)
+        pager = inbox.pager(pageSize, sortOrder)
         collectState()
     }
 
@@ -179,9 +216,50 @@ public class EngageMessageCenterListView(
     override fun close() {
         if (closed) return
         closed = true
+        deleteDialog?.dismiss()
+        deleteDialog = null
+        deleteConfirmationJob?.cancel()
+        deleteConfirmationJob = null
         if (::pager.isInitialized) pager.close()
         scope.cancel()
         EngageLogger.info("MessageCenter.ListView", "closed")
+    }
+
+    private fun requestDelete(entry: InboxEntry) {
+        if (closed || deleteConfirmationJob?.isActive == true || deleteDialog?.isShowing == true) return
+        showNativeDeleteConfirmation(entry)
+    }
+
+    private fun showNativeDeleteConfirmation(entry: InboxEntry) {
+        deleteDialog = MaterialDeleteConfirmationDialog(
+            context = context,
+            materialTheme = materialTheme,
+            onConfirm = {
+                deleteConfirmationJob = scope.launch { deleteEntry(entry) }
+            },
+        ).also { dialog ->
+            dialog.setOnDismissListener {
+                if (deleteDialog === dialog) deleteDialog = null
+            }
+            dialog.show()
+        }
+    }
+
+    private suspend fun deleteEntry(entry: InboxEntry) {
+        try {
+            inbox.delete(entry.id)
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            reportDeleteFailure()
+        }
+    }
+
+    private fun reportDeleteFailure() {
+        reportError(
+            MessageCenterViewErrorCode.INBOX,
+            context.getString(R.string.engage_message_center_delete_failed),
+            true,
+        )
     }
 
     private fun collectState() {
@@ -265,7 +343,7 @@ public class EngageMessageCenterListView(
         swipeRefresh.isRefreshing = pagerState.isRefreshing && pagerState.entries.isNotEmpty()
         progress.visibility = if (model.showProgress) View.VISIBLE else View.GONE
         filterBar.visibility = if (model.showFilters) View.VISIBLE else View.GONE
-        markAllRead.visibility = if (model.showMarkAllRead) View.VISIBLE else View.GONE
+        headerSummary.text = messageCenterHeaderSummary(resources, model.messageCount, model.unreadCount)
         emptyState.visibility = if (model.emptyKind != null) View.VISIBLE else View.GONE
         when (model.emptyKind) {
             MessageCenterEmptyKind.INBOX -> setEmptyCopy(
@@ -295,39 +373,45 @@ public class EngageMessageCenterListView(
     }
 
     private fun createFilterBar(): View = LinearLayout(context).apply {
-        gravity = Gravity.CENTER_VERTICAL
-        orientation = HORIZONTAL
-        setPadding(dp(16), dp(10), dp(16), dp(10))
-        setBackgroundColor(color(R.color.engage_message_center_page))
+        gravity = Gravity.START
+        orientation = VERTICAL
+        setPadding(
+            dp(this@EngageMessageCenterListView.layout.horizontalPaddingDp),
+            dp(8),
+            dp(this@EngageMessageCenterListView.layout.horizontalPaddingDp),
+            dp(10),
+        )
+        setBackgroundColor(materialTheme.surface)
+        headerSummary = TextView(context).apply {
+            setTextColor(materialTheme.onSurfaceVariant)
+            textSize = 12f
+            setTypeface(typeface, Typeface.BOLD)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        }
+        addView(
+            headerSummary,
+            LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+        )
+
         allFilter = filterChip(R.string.engage_message_center_filter_all, InboxViewFilter.ALL)
         unreadFilter = filterChip(R.string.engage_message_center_filter_unread, InboxViewFilter.UNREAD)
-        addView(allFilter, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)))
-        addView(unreadFilter, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)).apply { marginStart = dp(8) })
-        addView(View(context), LayoutParams(0, 1, 1f))
-        markAllRead = TextView(context).apply {
-            setText(R.string.engage_message_center_mark_all_read)
-            setTextColor(color(R.color.engage_message_center_accent))
-            textSize = 13f
-            gravity = Gravity.CENTER
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(dp(12), 0, dp(4), 0)
-            isClickable = true
-            isFocusable = true
-            background = roundedRippleBackground(
-                Color.TRANSPARENT,
-                colorWithAlpha(R.color.engage_message_center_accent, 28),
-                dp(16).toFloat(),
-            )
-            setOnClickListener { scope.launch { inbox.markAllRead() } }
-        }
-        addView(markAllRead, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)))
+        addView(
+            LinearLayout(context).apply {
+                orientation = HORIZONTAL
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+                background = roundedBackground(materialTheme.surfaceContainer, dp(20).toFloat())
+                addView(allFilter, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+                addView(unreadFilter, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            },
+            LayoutParams(dp(160), dp(36)).apply { topMargin = dp(6) },
+        )
     }
 
     private fun filterChip(label: Int, filter: InboxViewFilter): TextView = TextView(context).apply {
         setText(label)
         gravity = Gravity.CENTER
-        textSize = 13f
-        setPadding(dp(20), 0, dp(20), 0)
+        textSize = 12f
+        setPadding(dp(12), 0, dp(12), 0)
         isClickable = true
         isFocusable = true
         setOnClickListener {
@@ -345,10 +429,11 @@ public class EngageMessageCenterListView(
         setPadding(dp(32), dp(24), dp(32), dp(24))
         addView(
             FrameLayout(context).apply {
-                background = roundedBackground(color(R.color.engage_message_center_accent_soft), dp(56).toFloat())
+                background = roundedBackground(materialTheme.primaryContainer, dp(56).toFloat())
                 addView(
                     ImageView(context).apply {
                         setImageResource(R.drawable.engage_message_center_empty)
+                        imageTintList = ColorStateList.valueOf(materialTheme.primary)
                         contentDescription = null
                     },
                     FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER),
@@ -358,7 +443,7 @@ public class EngageMessageCenterListView(
         )
         emptyTitle = TextView(context).apply {
             gravity = Gravity.CENTER
-            setTextColor(color(R.color.engage_message_center_text))
+            setTextColor(materialTheme.onSurface)
             textSize = 22f
             setTypeface(typeface, Typeface.BOLD)
         }
@@ -367,7 +452,7 @@ public class EngageMessageCenterListView(
         })
         emptyBody = TextView(context).apply {
             gravity = Gravity.CENTER
-            setTextColor(color(R.color.engage_message_center_text_secondary))
+            setTextColor(materialTheme.onSurfaceVariant)
             textSize = 14f
             maxWidth = dp(300)
         }
@@ -377,7 +462,7 @@ public class EngageMessageCenterListView(
         addView(
             TextView(context).apply {
                 setText(R.string.engage_message_center_refresh)
-                setTextColor(color(R.color.engage_message_center_accent))
+                setTextColor(materialTheme.primary)
                 textSize = 14f
                 gravity = Gravity.CENTER
                 setTypeface(typeface, Typeface.BOLD)
@@ -385,10 +470,10 @@ public class EngageMessageCenterListView(
                 isClickable = true
                 isFocusable = true
                 background = roundedRippleBackground(
-                    color(R.color.engage_message_center_surface),
-                    colorWithAlpha(R.color.engage_message_center_accent, 28),
+                    materialTheme.surfaceContainerLow,
+                    materialTheme.primary.withAlpha(28),
                     dp(16).toFloat(),
-                    color(R.color.engage_message_center_outline),
+                    materialTheme.outlineVariant,
                 )
                 setOnClickListener { refresh() }
             },
@@ -402,14 +487,14 @@ public class EngageMessageCenterListView(
     }
 
     private fun styleFilter(view: TextView, selected: Boolean) {
-        view.setTextColor(color(if (selected) R.color.engage_message_center_on_accent else R.color.engage_message_center_text))
+        view.setTextColor(if (selected) materialTheme.onSurface else materialTheme.onSurfaceVariant)
         view.setTypeface(view.typeface, if (selected) Typeface.BOLD else Typeface.NORMAL)
         view.background = roundedRippleBackground(
-            color(if (selected) R.color.engage_message_center_accent else R.color.engage_message_center_surface),
-            colorWithAlpha(R.color.engage_message_center_accent, 36),
-            dp(20).toFloat(),
-            if (selected) null else color(R.color.engage_message_center_outline),
+            if (selected) materialTheme.surfaceContainerLow else Color.TRANSPARENT,
+            materialTheme.primary.withAlpha(28),
+            dp(18).toFloat(),
         )
+        view.elevation = if (selected) dp(1).toFloat() else 0f
     }
 
     private fun reportError(code: MessageCenterViewErrorCode, message: String, retryable: Boolean) {
@@ -430,9 +515,9 @@ public class EngageMessageCenterListView(
         if (stroke != null) setStroke(dp(1), stroke)
     }
 
-    private fun color(resource: Int): Int = ContextCompat.getColor(context, resource)
-    private fun colorWithAlpha(resource: Int, alpha: Int): Int = (color(resource) and 0x00FFFFFF) or (alpha shl 24)
+    private fun Int.withAlpha(alpha: Int): Int = (this and 0x00FFFFFF) or (alpha shl 24)
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Float): Int = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
         const val DEFAULT_PAGE_SIZE = 20
@@ -440,9 +525,91 @@ public class EngageMessageCenterListView(
     }
 }
 
+internal fun messageCenterHeaderSummary(
+    resources: android.content.res.Resources,
+    messageCount: Int,
+    unreadCount: Int,
+): String {
+    val messages = resources.getQuantityString(
+        R.plurals.engage_message_center_message_count,
+        messageCount,
+        messageCount,
+    )
+    val unread = resources.getQuantityString(
+        R.plurals.engage_message_center_unread_count,
+        unreadCount,
+        unreadCount,
+    )
+    return resources.getString(R.string.engage_message_center_header_summary, messages, unread)
+}
+
 private class InboxSpacingDecoration(private val spacing: Int) : RecyclerView.ItemDecoration() {
     override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
         outRect.top = spacing / 2
         outRect.bottom = spacing / 2
+    }
+}
+
+private class InboxDeleteSwipeCallback(
+    context: Context,
+    private val adapter: InboxAdapter,
+    private val materialTheme: MessageCenterMaterialTheme,
+    private val onDeleteRequested: (InboxEntry) -> Unit,
+) : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.START) {
+    private val density = context.resources.displayMetrics.density
+    private val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = materialTheme.error }
+    private val deleteIcon = requireNotNull(
+        ContextCompat.getDrawable(context, R.drawable.engage_message_center_delete),
+    ).mutate().also { DrawableCompat.setTint(it, materialTheme.onError) }
+
+    override fun onMove(
+        recyclerView: RecyclerView,
+        viewHolder: RecyclerView.ViewHolder,
+        target: RecyclerView.ViewHolder,
+    ): Boolean = false
+
+    override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+        val item = (viewHolder as? InboxAdapter.ViewHolder)?.item
+        val entry = inboxDeleteTarget(item) ?: return
+        adapter.restore(entry.id)
+        onDeleteRequested(entry)
+    }
+
+    override fun onChildDraw(
+        canvas: Canvas,
+        recyclerView: RecyclerView,
+        viewHolder: RecyclerView.ViewHolder,
+        dX: Float,
+        dY: Float,
+        actionState: Int,
+        isCurrentlyActive: Boolean,
+    ) {
+        if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && dX != 0f) {
+            val item = viewHolder.itemView
+            val cornerRadius = 16f * density
+            val swipingLeft = dX < 0f
+            canvas.drawRoundRect(
+                if (swipingLeft) item.right + dX else item.left.toFloat(),
+                item.top.toFloat(),
+                if (swipingLeft) item.right.toFloat() else item.left + dX,
+                item.bottom.toFloat(),
+                cornerRadius,
+                cornerRadius,
+                background,
+            )
+            if (kotlin.math.abs(dX) >= 48f * density) {
+                val iconSize = (24f * density).toInt()
+                val centerX = if (swipingLeft) item.right - 32f * density else item.left + 32f * density
+                val centerY = (item.top + item.bottom) / 2f
+                deleteIcon.setBounds(
+                    (centerX - iconSize / 2f).toInt(),
+                    (centerY - iconSize / 2f).toInt(),
+                    (centerX + iconSize / 2f).toInt(),
+                    (centerY + iconSize / 2f).toInt(),
+                )
+                deleteIcon.draw(canvas)
+            }
+        }
+        super.onChildDraw(canvas, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive)
     }
 }

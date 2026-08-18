@@ -2,6 +2,7 @@ package io.engage.sdk.messagecenter.divkit.render
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
@@ -12,7 +13,6 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import com.yandex.div.DivDataTag
 import com.yandex.div.coil.CoilDivImageLoader
 import com.yandex.div.core.Div2Context
@@ -30,6 +30,8 @@ import io.engage.sdk.EngageLogger
 import io.engage.sdk.InboxEntryId
 import io.engage.sdk.InboxRenderingSurface
 import io.engage.sdk.messagecenter.divkit.R
+import io.engage.sdk.messagecenter.divkit.MessageCenterMaterialTheme
+import io.engage.sdk.messagecenter.divkit.MessageCenterViewLayout
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -45,6 +47,8 @@ internal class InboxDivKitView(
     context: Context,
     private val scope: CoroutineScope,
     private val actionRouter: InboxActionRouter,
+    private val materialTheme: MessageCenterMaterialTheme = MessageCenterMaterialTheme.defaults(context),
+    private val layout: MessageCenterViewLayout = MessageCenterViewLayout(),
     private val surface: InboxRenderingSurface = InboxRenderingSurface.SUMMARY,
     private val showChrome: Boolean = true,
     private val onContentVisible: ((InboxEntryId) -> Unit)? = null,
@@ -63,8 +67,6 @@ internal class InboxDivKitView(
 
     init {
         minimumHeight = dp(72)
-        clipToOutline = showChrome
-        elevation = if (showChrome) dp(2).toFloat() else 0f
         EngageLogger.verbose("MessageCenter.DivKit", "item view created")
     }
 
@@ -101,12 +103,23 @@ internal class InboxDivKitView(
         divView?.cleanup()
         divView = null
         removeAllViews()
-        background = if (showChrome) cardBackground(read = !unread) else null
+        applyNativeChrome(
+            enabled = shouldApplyMessageCenterNativeChrome(
+                showChrome = showChrome,
+                hasPublishedRendering = rendering is RenderingResolution.Available,
+            ),
+            read = !unread,
+        )
         when (rendering) {
-            null -> addCentered(ProgressBar(context))
+            null -> addCentered(
+                ProgressBar(context).apply {
+                    indeterminateTintList = ColorStateList.valueOf(materialTheme.primary)
+                },
+            )
             is RenderingResolution.Unavailable -> addCentered(
                 TextView(context).apply {
                     setText(R.string.engage_message_center_unavailable)
+                    setTextColor(materialTheme.onSurfaceVariant)
                     gravity = Gravity.CENTER
                     setPadding(dp(24), dp(24), dp(24), dp(24))
                 },
@@ -128,11 +141,13 @@ internal class InboxDivKitView(
                     "rendering bound entryId=$entryId surface=$surface revision=${rendering.snapshot.revision}",
                 )
             }.onFailure { error ->
+                applyNativeChrome(enabled = showChrome, read = !unread)
                 EngageLogger.error("MessageCenter.DivKit", "rendering failed entryId=$entryId surface=$surface", error)
                 onRenderError?.invoke(error)
                 addCentered(
                     TextView(context).apply {
                         setText(R.string.engage_message_center_unavailable)
+                        setTextColor(materialTheme.onSurfaceVariant)
                         gravity = Gravity.CENTER
                         setPadding(dp(24), dp(24), dp(24), dp(24))
                     },
@@ -234,7 +249,7 @@ internal class InboxDivKitView(
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = dp(2).toFloat()
-                    setColor(ContextCompat.getColor(context, R.color.engage_message_center_accent))
+                    setColor(materialTheme.primary)
                 }
                 contentDescription = context.getString(R.string.engage_message_center_unread)
             },
@@ -244,7 +259,7 @@ internal class InboxDivKitView(
             View(context).apply {
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
-                    setColor(ContextCompat.getColor(context, R.color.engage_message_center_accent))
+                    setColor(materialTheme.primary)
                 }
                 importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
             },
@@ -255,20 +270,21 @@ internal class InboxDivKitView(
         )
     }
 
+    private fun applyNativeChrome(enabled: Boolean, read: Boolean) {
+        background = if (enabled) cardBackground(read) else null
+        clipToOutline = enabled
+        elevation = if (enabled) dp(2).toFloat() else 0f
+    }
+
     private fun cardBackground(read: Boolean) = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
-        cornerRadius = dp(20).toFloat()
-        setColor(
-            ContextCompat.getColor(
-                context,
-                if (read) R.color.engage_message_center_surface_read
-                else R.color.engage_message_center_surface,
-            ),
-        )
-        setStroke(dp(1), ContextCompat.getColor(context, R.color.engage_message_center_outline))
+        cornerRadius = dp(layout.itemCornerRadiusDp)
+        setColor(if (read) materialTheme.surfaceContainer else materialTheme.surfaceContainerLow)
+        setStroke(dp(1), materialTheme.outlineVariant)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Float): Float = value * resources.displayMetrics.density
 }
 
 internal const val MESSAGE_CENTER_ENGAGE_APPEARANCE_VARIABLE = "engage_appearance"
@@ -290,6 +306,11 @@ internal fun shouldReportContentVisibility(
     requested: Boolean,
     rendered: Boolean,
 ): Boolean = requested && rendered && surface == InboxRenderingSurface.DETAIL
+
+internal fun shouldApplyMessageCenterNativeChrome(
+    showChrome: Boolean,
+    hasPublishedRendering: Boolean,
+): Boolean = showChrome && !hasPublishedRendering
 
 private class InboxDivActionHandler(
     private val entryId: InboxEntryId,

@@ -1,13 +1,13 @@
 package io.engage.sdk.messagecenter.divkit.render
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import io.engage.sdk.Engage
 import io.engage.sdk.EngageLogger
 import io.engage.sdk.InboxEntryId
@@ -17,6 +17,8 @@ import io.engage.sdk.MessageCenterPresentationState
 import io.engage.sdk.messagecenter.divkit.EngageMessageCenterDivKitModule
 import io.engage.sdk.messagecenter.divkit.MessageCenterViewError
 import io.engage.sdk.messagecenter.divkit.MessageCenterViewErrorCode
+import io.engage.sdk.messagecenter.divkit.MessageCenterMaterialTheme
+import io.engage.sdk.messagecenter.divkit.MessageCenterViewLayout
 import io.engage.sdk.messagecenter.divkit.R
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.coroutines.CancellationException
@@ -36,6 +38,8 @@ public class EngageMessageCenterDetailView(
     context: Context,
     public var onUnavailable: (() -> Unit)? = null,
     public var onError: ((MessageCenterViewError) -> Unit)? = null,
+    private val materialTheme: MessageCenterMaterialTheme = MessageCenterMaterialTheme.defaults(context),
+    private val layout: MessageCenterViewLayout = MessageCenterViewLayout(),
 ) : FrameLayout(context), AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val runtime = EngageMessageCenterDivKitModule.requireRuntime()
@@ -45,15 +49,19 @@ public class EngageMessageCenterDetailView(
         context,
         scope,
         InboxActionRouter(inbox, renderingSupport, onDeleted = ::entryDeleted),
+        materialTheme = materialTheme,
+        layout = layout,
         surface = InboxRenderingSurface.DETAIL,
         showChrome = false,
         onContentVisible = ::markVisible,
         onRenderError = ::renderFailed,
     )
-    private val progress = ProgressBar(context)
+    private val progress = ProgressBar(context).apply {
+        indeterminateTintList = ColorStateList.valueOf(materialTheme.primary)
+    }
     private val unavailable = TextView(context).apply {
         setText(R.string.engage_message_center_unavailable)
-        setTextColor(ContextCompat.getColor(context, R.color.engage_message_center_text_secondary))
+        setTextColor(materialTheme.onSurfaceVariant)
         textSize = 15f
         gravity = Gravity.CENTER
         visibility = View.GONE
@@ -70,7 +78,7 @@ public class EngageMessageCenterDetailView(
     private var closed = false
 
     init {
-        setBackgroundColor(ContextCompat.getColor(context, R.color.engage_message_center_page))
+        setBackgroundColor(materialTheme.surface)
         renderer.visibility = View.GONE
         addView(renderer, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         addView(progress, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))

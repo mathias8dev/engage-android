@@ -3,6 +3,7 @@ package io.engage.sdk.messagecenter.data
 import io.engage.sdk.messagecenter.domain.InboxRendering
 import io.engage.sdk.InboxRenderer
 import io.engage.sdk.InboxRenderingSurface
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.messagecenter.domain.InboxScope
 import io.engage.sdk.messagecenter.domain.MutationResult
 import io.engage.sdk.messagecenter.domain.MutationStatus
@@ -28,14 +29,22 @@ import java.io.IOException
 import java.time.Instant
 
 internal class InboxClient(private val context: EngageModuleContext) {
-    suspend fun page(cursor: String?, pageSize: Int): RemoteInboxPage {
-        context.logDebug("MessageCenter.Network", "page request pageSize=$pageSize hasCursor=${cursor != null}")
+    suspend fun page(
+        cursor: String?,
+        pageSize: Int,
+        sortOrder: InboxSortOrder = InboxSortOrder.NEWEST_FIRST,
+    ): RemoteInboxPage {
+        context.logDebug(
+            "MessageCenter.Network",
+            "page request pageSize=$pageSize sortOrder=$sortOrder hasCursor=${cursor != null}",
+        )
         val response = context.authorizedRequest(
             EngageHttpRequest(
                 method = EngageHttpMethod.GET,
                 path = "sdk/inbox",
                 query = buildMap {
                     put("pageSize", pageSize.toString())
+                    put("sortOrder", sortOrder.name)
                     cursor?.let { put("cursor", it) }
                 },
             ),

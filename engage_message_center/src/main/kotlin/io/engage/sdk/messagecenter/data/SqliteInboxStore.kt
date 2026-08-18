@@ -6,6 +6,7 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import io.engage.sdk.EngageLogger
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.messagecenter.domain.CachedInboxWindow
 import io.engage.sdk.messagecenter.domain.InboxScope
 import io.engage.sdk.messagecenter.domain.InboxStore
@@ -58,30 +59,7 @@ internal class SqliteInboxStore(
             )
             """.trimIndent(),
         )
-        database.execSQL(
-            """
-            CREATE TABLE inbox_page_state (
-                generation INTEGER NOT NULL,
-                page_size INTEGER NOT NULL,
-                cursor_key TEXT NOT NULL,
-                next_cursor TEXT,
-                has_more INTEGER NOT NULL,
-                PRIMARY KEY (generation, page_size, cursor_key)
-            )
-            """.trimIndent(),
-        )
-        database.execSQL(
-            """
-            CREATE TABLE inbox_page_entries (
-                generation INTEGER NOT NULL,
-                page_size INTEGER NOT NULL,
-                cursor_key TEXT NOT NULL,
-                position INTEGER NOT NULL,
-                entry_id TEXT NOT NULL,
-                PRIMARY KEY (generation, page_size, cursor_key, position)
-            )
-            """.trimIndent(),
-        )
+        createPageTables(database)
         database.execSQL(
             """
             CREATE TABLE inbox_meta (
@@ -106,7 +84,42 @@ internal class SqliteInboxStore(
         EngageLogger.debug("MessageCenter.Store", "database schema created")
     }
 
-    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            database.execSQL("DROP TABLE IF EXISTS inbox_page_entries")
+            database.execSQL("DROP TABLE IF EXISTS inbox_page_state")
+            createPageTables(database)
+        }
+    }
+
+    private fun createPageTables(database: SQLiteDatabase) {
+        database.execSQL(
+            """
+            CREATE TABLE inbox_page_state (
+                generation INTEGER NOT NULL,
+                page_size INTEGER NOT NULL,
+                sort_order TEXT NOT NULL,
+                cursor_key TEXT NOT NULL,
+                next_cursor TEXT,
+                has_more INTEGER NOT NULL,
+                PRIMARY KEY (generation, page_size, sort_order, cursor_key)
+            )
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            CREATE TABLE inbox_page_entries (
+                generation INTEGER NOT NULL,
+                page_size INTEGER NOT NULL,
+                sort_order TEXT NOT NULL,
+                cursor_key TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                entry_id TEXT NOT NULL,
+                PRIMARY KEY (generation, page_size, sort_order, cursor_key, position)
+            )
+            """.trimIndent(),
+        )
+    }
 
     override suspend fun activateGeneration(generation: Long) = mutex.withLock {
         EngageLogger.debug("MessageCenter.Store", "generation activating generation=$generation")
@@ -132,6 +145,7 @@ internal class SqliteInboxStore(
         pageSize: Int,
         cursor: String?,
         page: RemoteInboxPage,
+        sortOrder: InboxSortOrder,
     ): Boolean = mutex.withLock {
         if (!accepts(generation)) {
             EngageLogger.warn(
@@ -154,6 +168,7 @@ internal class SqliteInboxStore(
                 ContentValues().apply {
                     put("generation", generation)
                     put("page_size", pageSize)
+                    put("sort_order", sortOrder.name)
                     put("cursor_key", cursorKey)
                     put("next_cursor", page.nextCursor)
                     put("has_more", if (page.hasMore) 1 else 0)
@@ -162,8 +177,8 @@ internal class SqliteInboxStore(
             )
             delete(
                 "inbox_page_entries",
-                "generation = ? AND page_size = ? AND cursor_key = ?",
-                arrayOf(generation.toString(), pageSize.toString(), cursorKey),
+                "generation = ? AND page_size = ? AND sort_order = ? AND cursor_key = ?",
+                arrayOf(generation.toString(), pageSize.toString(), sortOrder.name, cursorKey),
             )
             page.entries.forEachIndexed { index, entry ->
                 insertOrThrow(
@@ -172,6 +187,7 @@ internal class SqliteInboxStore(
                     ContentValues().apply {
                         put("generation", generation)
                         put("page_size", pageSize)
+                        put("sort_order", sortOrder.name)
                         put("cursor_key", cursorKey)
                         put("position", index)
                         put("entry_id", entry.id)
@@ -193,7 +209,11 @@ internal class SqliteInboxStore(
         true
     }
 
-    override suspend fun cachedWindow(generation: Long, pageSize: Int): CachedInboxWindow = mutex.withLock {
+    override suspend fun cachedWindow(
+        generation: Long,
+        pageSize: Int,
+        sortOrder: InboxSortOrder,
+    ): CachedInboxWindow = mutex.withLock {
         EngageLogger.verbose("MessageCenter.Store", "cached window reading generation=$generation pageSize=$pageSize")
         val ids = linkedSetOf<String>()
         val visited = mutableSetOf<String>()
@@ -204,8 +224,8 @@ internal class SqliteInboxStore(
             val state = readableDatabase.query(
                 "inbox_page_state",
                 arrayOf("next_cursor", "has_more"),
-                "generation = ? AND page_size = ? AND cursor_key = ?",
-                arrayOf(generation.toString(), pageSize.toString(), cursorKey),
+                "generation = ? AND page_size = ? AND sort_order = ? AND cursor_key = ?",
+                arrayOf(generation.toString(), pageSize.toString(), sortOrder.name, cursorKey),
                 null,
                 null,
                 null,
@@ -216,8 +236,8 @@ internal class SqliteInboxStore(
             readableDatabase.query(
                 "inbox_page_entries",
                 arrayOf("entry_id"),
-                "generation = ? AND page_size = ? AND cursor_key = ?",
-                arrayOf(generation.toString(), pageSize.toString(), cursorKey),
+                "generation = ? AND page_size = ? AND sort_order = ? AND cursor_key = ?",
+                arrayOf(generation.toString(), pageSize.toString(), sortOrder.name, cursorKey),
                 null,
                 null,
                 "position ASC",
@@ -576,7 +596,7 @@ internal class SqliteInboxStore(
 
     private companion object {
         const val DATABASE_NAME = "engage_message_center.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
         const val MISSING_ENTRY = "__missing__"
     }
 }

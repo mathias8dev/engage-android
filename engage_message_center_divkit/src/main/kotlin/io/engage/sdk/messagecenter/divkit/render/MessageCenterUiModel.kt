@@ -17,9 +17,9 @@ internal enum class MessageCenterEmptyKind {
 
 internal data class MessageCenterUiModel(
     val items: List<InboxUiItem>,
+    val messageCount: Int,
     val unreadCount: Int,
     val showFilters: Boolean,
-    val showMarkAllRead: Boolean,
     val showProgress: Boolean,
     val emptyKind: MessageCenterEmptyKind?,
     val showErrorBanner: Boolean,
@@ -54,9 +54,9 @@ internal fun messageCenterUiModel(
     }
     return MessageCenterUiModel(
         items = items,
+        messageCount = state.entries.size,
         unreadCount = unreadCount,
         showFilters = state.entries.isNotEmpty(),
-        showMarkAllRead = unreadCount > 0,
         showProgress = initialLoading || unreadPageLoading,
         emptyKind = emptyKind,
         showErrorBanner = state.entries.isNotEmpty() && (state.error != null || renderingError),
