@@ -96,7 +96,7 @@ public interface EngageModuleContext {
     public val storageScope: String
         get() {
             var hash = -3750763034362895579L
-            "${config.endpoint.normalize()}\u0000${config.appKey}".toByteArray(Charsets.UTF_8).forEach { byte ->
+            config.appKey.toByteArray(Charsets.UTF_8).forEach { byte ->
                 hash = (hash xor byte.toUByte().toLong()) * 1099511628211L
             }
             return hash.toULong().toString(16).padStart(16, '0')

@@ -145,6 +145,22 @@ host does not manually instantiate them.
 Observe `Engage.state` when the application needs to expose SDK initialization diagnostics.
 Development logs use the `Engage` Logcat tag.
 
+When the same release both upgrades from endpoint-scoped SDK storage and changes the API endpoint,
+declare the previous endpoint so Engage can move the correct App Key's durable state:
+
+```kotlin
+import java.net.URI
+
+EngageConfig(
+    appKey = BuildConfig.ENGAGE_APP_KEY,
+    endpoint = URI.create(BuildConfig.ENGAGE_ENDPOINT),
+    legacyEndpoints = listOf(URI.create(BuildConfig.PREVIOUS_ENGAGE_ENDPOINT)),
+)
+```
+
+This one-time migration option is unnecessary when the endpoint is unchanged. It is explicit so a
+process configured with several Engage App Keys never guesses which legacy storage it owns.
+
 ## Push notifications
 
 Add `engage-android-push-fcm`, configure Firebase in the host application, and apply the Google

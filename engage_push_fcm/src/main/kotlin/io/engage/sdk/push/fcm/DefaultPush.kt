@@ -186,10 +186,24 @@ internal class DefaultPush(
 
     suspend fun processMessage(data: Map<String, String>) {
         val payload = EngagePushPayload.from(data) ?: return
+        if (payload.installationId != null && payload.installationId != moduleContext.installationId.value) {
+            moduleContext.logDebug(
+                "Push",
+                "message ignored deliveryId=${payload.deliveryId} reason=installation_mismatch",
+            )
+            return
+        }
         if (!canRun()) {
             moduleContext.logDebug(
                 "Push",
                 "message ignored deliveryId=${payload.deliveryId} reason=${disabledReason()}",
+            )
+            return
+        }
+        if (!claimDelivery(payload.deliveryId)) {
+            moduleContext.logDebug(
+                "Push",
+                "message ignored deliveryId=${payload.deliveryId} reason=duplicate_delivery",
             )
             return
         }
@@ -504,6 +518,21 @@ internal class DefaultPush(
         ?.let { runCatching { PushSubscriptionState.valueOf(it) }.getOrNull() }
         ?: PushSubscriptionState.OPTED_IN
 
+    private fun claimDelivery(deliveryId: String): Boolean = synchronized(preferences) {
+        val processed = preferences.getString(PROCESSED_DELIVERIES, null)
+            ?.lineSequence()
+            ?.filter(String::isNotBlank)
+            ?.toMutableList()
+            ?: mutableListOf()
+        if (deliveryId in processed) return@synchronized false
+        processed += deliveryId
+        val bounded = processed.takeLast(MAX_PROCESSED_DELIVERIES).joinToString("\n")
+        check(preferences.edit().putString(PROCESSED_DELIVERIES, bounded).commit()) {
+            "Could not persist processed Engage push deliveries"
+        }
+        true
+    }
+
     private fun showNotification(payload: EngagePushPayload, image: Bitmap?) {
         val config = moduleContext.config.push.android ?: run {
             moduleContext.logWarn("Push", "notification skipped deliveryId=${payload.deliveryId} reason=no_android_config")
@@ -612,6 +641,8 @@ internal class DefaultPush(
 
     private companion object {
         const val PREFERENCES = "engage_push"
+        const val PROCESSED_DELIVERIES = "processed_delivery_ids"
+        const val MAX_PROCESSED_DELIVERIES = 100
         const val SUBSCRIPTION = "subscription"
         const val PENDING_SUBSCRIPTION = "pending_subscription"
         const val REGISTERED_TOKEN_HASH = "registered_token_hash"

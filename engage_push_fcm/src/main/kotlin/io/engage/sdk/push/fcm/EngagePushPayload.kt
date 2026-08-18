@@ -5,6 +5,7 @@ import io.engage.sdk.EngageLogger
 internal data class EngagePushPayload(
     val deliveryId: String,
     val messageId: String,
+    val installationId: String?,
     val actionType: String,
     val actionValue: String?,
     val actionArguments: Map<String, String>,
@@ -33,6 +34,7 @@ internal data class EngagePushPayload(
             return EngagePushPayload(
                 deliveryId = deliveryId,
                 messageId = messageId,
+                installationId = data[INSTALLATION_ID]?.takeIf(String::isNotBlank),
                 actionType = data[ACTION_TYPE] ?: "OPEN_APP",
                 actionValue = data[ACTION_VALUE],
                 actionArguments = data.entries
@@ -57,6 +59,7 @@ internal data class EngagePushPayload(
         private const val ENGAGE_KEY_PREFIX = "engage_"
         private const val DELIVERY_ID = "engage_delivery_id"
         private const val MESSAGE_ID = "engage_message_id"
+        private const val INSTALLATION_ID = "engage_installation_id"
         private const val ACTION_TYPE = "engage_action_type"
         private const val ACTION_VALUE = "engage_action_value"
         private const val ACTION_ARGUMENT_PREFIX = "engage_action_arg_"
