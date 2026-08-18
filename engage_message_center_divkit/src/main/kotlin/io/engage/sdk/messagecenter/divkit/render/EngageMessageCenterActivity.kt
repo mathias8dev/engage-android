@@ -1,5 +1,6 @@
 package io.engage.sdk.messagecenter.divkit.render
 
+import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
@@ -83,6 +84,7 @@ public class EngageMessageCenterActivity : ComponentActivity() {
         adapter = InboxAdapter(
             lifecycleScope,
             InboxActionRouter(inbox, runtime.renderingSupport()),
+            ::openDetail,
         )
         setContentView(createContentView())
         val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
@@ -399,6 +401,14 @@ public class EngageMessageCenterActivity : ComponentActivity() {
             render()
             EngageLogger.info("MessageCenter.Activity", "manual refresh completed entries=${pager.state.value.entries.size}")
         }
+    }
+
+    private fun openDetail(item: InboxUiItem) {
+        if (item.rendering !is RenderingResolution.Available) return
+        startActivity(
+            Intent(this, EngageMessageCenterDetailActivity::class.java)
+                .putExtra(EngageMessageCenterDetailActivity.EXTRA_ENTRY_ID, item.entry.id.value),
+        )
     }
 
     private fun requestNextPageIfNeeded() {

@@ -6,9 +6,12 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import io.engage.sdk.InboxEntryId
 import io.engage.sdk.InboxRenderingSnapshot
+import io.engage.sdk.InboxRenderer
+import io.engage.sdk.InboxRenderingSurface
 import io.engage.sdk.EngageLogger
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 
 internal class RenderingStore(
@@ -20,6 +23,16 @@ internal class RenderingStore(
 
     override fun onCreate(database: SQLiteDatabase) {
         EngageLogger.debug("MessageCenter.RenderingStore", "database schema creating version=$DATABASE_VERSION")
+        createSchema(database)
+        EngageLogger.debug("MessageCenter.RenderingStore", "database schema created")
+    }
+
+    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        database.execSQL("DROP TABLE IF EXISTS inbox_renderings")
+        createSchema(database)
+    }
+
+    private fun createSchema(database: SQLiteDatabase) {
         database.execSQL(
             """
             CREATE TABLE inbox_renderings (
@@ -28,15 +41,12 @@ internal class RenderingStore(
                 available INTEGER NOT NULL,
                 renderer TEXT,
                 revision INTEGER,
-                document TEXT,
+                surfaces TEXT,
                 PRIMARY KEY (generation, entry_id)
             )
             """.trimIndent(),
         )
-        EngageLogger.debug("MessageCenter.RenderingStore", "database schema created")
     }
-
-    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
 
     @Synchronized
     fun activateGeneration(generation: Long) {
@@ -66,7 +76,7 @@ internal class RenderingStore(
             val arguments = arrayOf(generation.toString()) + chunk.map { it.value }
             readableDatabase.query(
                 "inbox_renderings",
-                arrayOf("entry_id", "available", "renderer", "revision", "document"),
+                arrayOf("entry_id", "available", "renderer", "revision", "surfaces"),
                 "generation = ? AND entry_id IN ($placeholders)",
                 arguments,
                 null,
@@ -82,9 +92,13 @@ internal class RenderingStore(
                             RenderingResolution.Available(
                                 InboxRenderingSnapshot(
                                     entryId = entryId,
-                                    renderer = cursor.getString(2),
+                                    renderer = InboxRenderer.valueOf(cursor.getString(2)),
                                     revision = cursor.getLong(3),
-                                    document = json.parseToJsonElement(cursor.getString(4)).jsonObject,
+                                    surfaces = json.parseToJsonElement(cursor.getString(4)).jsonObject.let { surfaces ->
+                                        InboxRenderingSurface.entries.associateWith { surface ->
+                                            requireNotNull(surfaces[surface.name]) { "Missing ${surface.name}" }.jsonObject
+                                        }
+                                    },
                                 ),
                             )
                         }.getOrNull()
@@ -130,15 +144,20 @@ internal class RenderingStore(
                         when (resolution) {
                             is RenderingResolution.Available -> {
                                 put("available", 1)
-                                put("renderer", resolution.snapshot.renderer)
+                                put("renderer", resolution.snapshot.renderer.name)
                                 put("revision", resolution.snapshot.revision)
-                                put("document", resolution.snapshot.document.toString())
+                                put(
+                                    "surfaces",
+                                    JsonObject(
+                                        resolution.snapshot.surfaces.mapKeys { (surface, _) -> surface.name },
+                                    ).toString(),
+                                )
                             }
                             is RenderingResolution.Unavailable -> {
                                 put("available", 0)
                                 putNull("renderer")
                                 putNull("revision")
-                                putNull("document")
+                                putNull("surfaces")
                             }
                         }
                     },
@@ -160,7 +179,7 @@ internal class RenderingStore(
 
     private companion object {
         const val DATABASE_NAME = "engage_message_center_divkit.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
         const val MAX_SQL_ARGUMENTS = 900
     }
 }

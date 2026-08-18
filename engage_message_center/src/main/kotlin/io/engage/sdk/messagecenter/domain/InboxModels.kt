@@ -1,6 +1,8 @@
 package io.engage.sdk.messagecenter.domain
 
 import kotlinx.serialization.json.JsonObject
+import io.engage.sdk.InboxRenderer
+import io.engage.sdk.InboxRenderingSurface
 import java.time.Instant
 import kotlinx.coroutines.flow.StateFlow
 
@@ -49,9 +51,9 @@ internal data class MutationResult(
 
 internal data class InboxRendering(
     val entryId: String,
-    val renderer: String,
+    val renderer: InboxRenderer,
     val revision: Long,
-    val document: JsonObject,
+    val surfaces: Map<InboxRenderingSurface, JsonObject>,
 )
 
 internal data class CachedInboxWindow(

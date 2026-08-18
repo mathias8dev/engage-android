@@ -66,12 +66,26 @@ public interface MessageCenter {
 }
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public enum class InboxRenderer {
+    DIVKIT,
+}
+
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public enum class InboxRenderingSurface {
+    SUMMARY,
+    DETAIL,
+}
+
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public data class InboxRenderingSnapshot(
     val entryId: InboxEntryId,
-    val renderer: String,
+    val renderer: InboxRenderer,
     val revision: Long,
-    val document: JsonObject,
-)
+    val surfaces: Map<InboxRenderingSurface, JsonObject>,
+) {
+    public fun requireSurface(surface: InboxRenderingSurface): JsonObject =
+        requireNotNull(surfaces[surface]) { "Inbox rendering is missing ${surface.name}" }
+}
 
 /** Internal bridge consumed only by official Message Center UI artifacts. */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)

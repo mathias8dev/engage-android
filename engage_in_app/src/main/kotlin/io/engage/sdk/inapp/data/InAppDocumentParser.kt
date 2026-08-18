@@ -15,6 +15,7 @@ import io.engage.sdk.inapp.domain.Campaign
 import io.engage.sdk.inapp.domain.ConflictPolicy
 import io.engage.sdk.inapp.domain.ContentVariant
 import io.engage.sdk.inapp.domain.DisplayPolicy
+import io.engage.sdk.inapp.domain.InAppPersonalizationContext
 import io.engage.sdk.inapp.domain.Trigger
 import io.engage.sdk.inapp.domain.TriggerType
 import io.engage.sdk.spi.EngageRemoteDocument
@@ -70,6 +71,7 @@ internal object InAppDocumentParser {
             defaultLocale = definition.string("defaultLocale") ?: "und",
             fallbackLocale = definition.string("fallbackLocale"),
             variants = variants,
+            personalization = parsePersonalization(payload),
             oneShot = false,
         )
     }
@@ -104,6 +106,7 @@ internal object InAppDocumentParser {
             defaultLocale = "und",
             fallbackLocale = null,
             variants = listOf(variant),
+            personalization = parsePersonalization(payload),
             oneShot = true,
         )
     }
@@ -125,6 +128,14 @@ internal object InAppDocumentParser {
         cooldownMinutes = value.int("cooldownMinutes"),
         redisplayAfterDismissal = value.boolean("redisplayAfterDismissal") ?: false,
     )
+
+    private fun parsePersonalization(payload: JsonObject): InAppPersonalizationContext {
+        val personalization = payload["personalization"] as? JsonObject ?: return InAppPersonalizationContext()
+        return InAppPersonalizationContext(
+            values = personalization["values"] as? JsonObject ?: JsonObject(emptyMap()),
+            fallbacks = personalization["fallbacks"] as? JsonObject ?: JsonObject(emptyMap()),
+        )
+    }
 
     private fun parseVariant(value: JsonObject): ContentVariant {
         val content = value.requiredObject("content")

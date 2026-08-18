@@ -24,7 +24,7 @@ internal class DefaultMessageCenter(private val context: EngageModuleContext) : 
                 InboxEntryId(rendering.entryId),
                 rendering.renderer,
                 rendering.revision,
-                rendering.document,
+                rendering.surfaces,
             )
         }
             .also { context.logInfo("MessageCenter", "renderings resolved count=${it.size}") }

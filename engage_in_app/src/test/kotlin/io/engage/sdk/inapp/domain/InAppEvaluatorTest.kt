@@ -8,6 +8,8 @@ import io.engage.sdk.OverlayFormat
 import io.engage.sdk.OverlayPresentation
 import io.engage.sdk.spi.EngageSignal
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -62,6 +64,70 @@ class InAppEvaluatorTest {
         evaluator.replaceCampaigns(listOf(campaign("checkout-only", 1)))
         evaluator.onSignal(EngageSignal.ScreenViewed("home"))
         assertTrue(evaluator.candidates().isEmpty())
+    }
+
+    @Test
+    fun `event or screen keeps event eligibility across screen changes and clears only screen matches`() {
+        val mixed = campaign("mixed", 1).copy(
+            triggers = listOf(
+                Trigger("checkout", TriggerType.SCREEN_VIEW, 0, "checkout", null, null, null),
+                Trigger("purchase", TriggerType.EVENT, 0, null, "purchase", null, null),
+            ),
+        )
+        evaluator.replaceCampaigns(listOf(mixed))
+        evaluator.onSignal(EngageSignal.ScreenViewed("home"))
+        evaluator.onSignal(EngageSignal.EventOccurred("purchase", buildJsonObject { put("amount", "42") }))
+
+        val candidate = evaluator.candidates().single()
+        assertEquals("purchase", candidate.matchedTrigger?.id)
+
+        evaluator.onSignal(EngageSignal.ScreenViewed("checkout"))
+        evaluator.onSignal(EngageSignal.ScreenCleared)
+        assertEquals("purchase", evaluator.candidates().single().matchedTrigger?.id)
+    }
+
+    @Test
+    fun `earliest eligible trigger wins deterministically and preserves event properties`() {
+        val mixed = campaign("delayed", 1).copy(
+            triggers = listOf(
+                Trigger("slow-screen", TriggerType.SCREEN_VIEW, 30, "checkout", null, null, null),
+                Trigger("fast-event", TriggerType.EVENT, 0, null, "purchase", null, null),
+            ),
+            personalization = InAppPersonalizationContext(
+                fallbacks = buildJsonObject {
+                    put("event", buildJsonObject { put("amount", "fallback") })
+                },
+            ),
+            variants = listOf(variant("fr").copy(payload = buildJsonObject {
+                put("text", buildJsonObject { put(IN_APP_VALUE_BINDING_MARKER, "event.amount") })
+            })),
+        )
+        evaluator.replaceCampaigns(listOf(mixed))
+        evaluator.onSignal(EngageSignal.ScreenViewed("checkout"))
+        evaluator.onSignal(EngageSignal.EventOccurred("purchase", buildJsonObject { put("amount", "42") }))
+
+        val candidate = evaluator.candidates().single()
+        assertEquals("fast-event", candidate.matchedTrigger?.id)
+        assertEquals("42", candidate.payload["text"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `runtime type mismatch falls back instead of sending an incompatible value to DivKit`() {
+        val personalized = campaign("typed", 1).copy(
+            triggers = listOf(Trigger("purchase", TriggerType.EVENT, 0, null, "purchase", null, null)),
+            personalization = InAppPersonalizationContext(
+                fallbacks = buildJsonObject {
+                    put("event", buildJsonObject { put("amount", 7) })
+                },
+            ),
+            variants = listOf(variant("fr").copy(payload = buildJsonObject {
+                put("font_size", buildJsonObject { put(IN_APP_VALUE_BINDING_MARKER, "event.amount") })
+            })),
+        )
+        evaluator.replaceCampaigns(listOf(personalized))
+        evaluator.onSignal(EngageSignal.EventOccurred("purchase", buildJsonObject { put("amount", "large") }))
+
+        assertEquals(7, evaluator.candidates().single().payload["font_size"]?.jsonPrimitive?.content?.toInt())
     }
 
     private fun campaign(key: String, priority: Int): Campaign = Campaign(

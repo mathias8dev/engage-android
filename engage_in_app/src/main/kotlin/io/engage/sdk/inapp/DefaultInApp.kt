@@ -423,7 +423,7 @@ private fun ResolvedContent.toPublic() = InAppContent(
     messageId = campaign.messageId,
     variantId = variant.id ?: variant.key,
     type = variant.type,
-    payload = variant.payload,
+    payload = payload,
     presentation = variant.presentation,
 )
 
