@@ -42,6 +42,7 @@ internal class DefaultPreferenceCenter(
     private val outbox: OperationOutbox,
     private val features: StateFlow<Set<SdkFeature>>,
     private val scope: CoroutineScope,
+    private val refreshRemoteState: suspend () -> Unit,
 ) : PreferenceCenter {
     private val flows = ConcurrentHashMap<String, StateFlow<PreferenceCenterSnapshot?>>()
 
@@ -61,6 +62,12 @@ internal class DefaultPreferenceCenter(
             require(CENTER_KEY.matches(key)) { "Preference center keys must match ${CENTER_KEY.pattern}" }
         }
         displayInternal(options)
+    }
+
+    override suspend fun refresh() {
+        EngageLogger.info("Preferences", "manual refresh requested")
+        refreshRemoteState()
+        EngageLogger.info("Preferences", "manual refresh completed")
     }
 
     private fun flowFor(key: String): StateFlow<PreferenceCenterSnapshot?> = flows.getOrPut(key) {

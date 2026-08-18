@@ -146,6 +146,7 @@ internal class CoreRuntime(
         outbox,
         features.enabled,
         scope,
+        refreshRemoteState = ::refresh,
     )
     private val privacyDelegate = DefaultPrivacy(
         config.endpoint,

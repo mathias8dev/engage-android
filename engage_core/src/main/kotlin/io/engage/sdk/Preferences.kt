@@ -54,5 +54,6 @@ public data class PreferenceCenterDisplayOptions(
 public interface PreferenceCenter {
     fun center(): StateFlow<PreferenceCenterSnapshot?>
     fun center(key: String): StateFlow<PreferenceCenterSnapshot?>
+    suspend fun refresh()
     fun display(options: PreferenceCenterDisplayOptions = PreferenceCenterDisplayOptions())
 }
