@@ -11,4 +11,6 @@
     <color name="engage_message_center_accent">#4FD5B7</color>
     <color name="engage_message_center_accent_soft">#153B32</color>
     <color name="engage_message_center_on_accent">#06241D</color>
+    <color name="engage_message_center_error">#FFB4AB</color>
+    <color name="engage_message_center_on_error">#690005</color>
 </resources>

@@ -53,14 +53,18 @@ internal data class Campaign(
     val defaultLocale: String,
     val fallbackLocale: String?,
     val variants: List<ContentVariant>,
+    val personalization: InAppPersonalizationContext = InAppPersonalizationContext(),
     val oneShot: Boolean,
 )
 
 internal data class ResolvedContent(
     val campaign: Campaign,
     val variant: ContentVariant,
+    val payload: JsonObject,
+    val matchedTrigger: Trigger?,
 ) {
-    val instanceKey: String = "${campaign.key}:${campaign.revision}:${variant.id ?: variant.key.orEmpty()}"
+    val instanceKey: String =
+        "${campaign.key}:${campaign.revision}:${variant.id ?: variant.key.orEmpty()}:${matchedTrigger?.id.orEmpty()}"
 }
 
 internal data class ImpressionHistory(

@@ -2,6 +2,7 @@ package io.engage.sdk.messagecenter.divkit.render
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
@@ -12,7 +13,6 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import com.yandex.div.DivDataTag
 import com.yandex.div.coil.CoilDivImageLoader
 import com.yandex.div.core.Div2Context
@@ -27,7 +27,11 @@ import com.yandex.div.json.ParsingErrorLogger
 import com.yandex.div2.DivData
 import io.engage.sdk.InboxEntry
 import io.engage.sdk.EngageLogger
+import io.engage.sdk.InboxEntryId
+import io.engage.sdk.InboxRenderingSurface
 import io.engage.sdk.messagecenter.divkit.R
+import io.engage.sdk.messagecenter.divkit.MessageCenterMaterialTheme
+import io.engage.sdk.messagecenter.divkit.MessageCenterViewLayout
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -43,10 +47,18 @@ internal class InboxDivKitView(
     context: Context,
     private val scope: CoroutineScope,
     private val actionRouter: InboxActionRouter,
+    private val materialTheme: MessageCenterMaterialTheme = MessageCenterMaterialTheme.defaults(context),
+    private val layout: MessageCenterViewLayout = MessageCenterViewLayout(),
+    private val surface: InboxRenderingSurface = InboxRenderingSurface.SUMMARY,
+    private val showChrome: Boolean = true,
+    private val onContentVisible: ((InboxEntryId) -> Unit)? = null,
+    private val onRenderError: ((Throwable) -> Unit)? = null,
 ) : FrameLayout(context) {
     private var divView: Div2View? = null
     private var appearanceVariable: Variable.StringVariable? = null
-    private var boundItem: InboxUiItem? = null
+    private var boundEntryId: InboxEntryId? = null
+    private var reportContentVisibility = false
+    private var contentRendered = false
     private var visibilityReported = false
     private val preDrawListener = android.view.ViewTreeObserver.OnPreDrawListener {
         reportVisibilityIfNeeded()
@@ -55,8 +67,6 @@ internal class InboxDivKitView(
 
     init {
         minimumHeight = dp(72)
-        clipToOutline = true
-        elevation = dp(2).toFloat()
         EngageLogger.verbose("MessageCenter.DivKit", "item view created")
     }
 
@@ -66,47 +76,93 @@ internal class InboxDivKitView(
             "binding entryId=${item.entry.id} read=${item.entry.readAt != null} " +
                 "rendering=${item.rendering?.let { it::class.simpleName } ?: "loading"}",
         )
-        if (boundItem?.entry?.id != item.entry.id) visibilityReported = item.entry.readAt != null
-        boundItem = item
+        bindRendering(
+            entryId = item.entry.id,
+            rendering = item.rendering,
+            unread = item.entry.readAt == null,
+            reportVisibility = false,
+        )
+    }
+
+    fun bindDetail(entryId: InboxEntryId, rendering: RenderingResolution) {
+        bindRendering(entryId, rendering, unread = false, reportVisibility = true)
+    }
+
+    private fun bindRendering(
+        entryId: InboxEntryId,
+        rendering: RenderingResolution?,
+        unread: Boolean,
+        reportVisibility: Boolean,
+    ) {
+        if (boundEntryId != entryId || reportContentVisibility != reportVisibility) {
+            visibilityReported = false
+        }
+        boundEntryId = entryId
+        reportContentVisibility = reportVisibility
+        contentRendered = false
         divView?.cleanup()
         divView = null
         removeAllViews()
-        background = cardBackground(read = item.entry.readAt != null)
-        when (val rendering = item.rendering) {
-            null -> addCentered(ProgressBar(context))
+        applyNativeChrome(
+            enabled = shouldApplyMessageCenterNativeChrome(
+                showChrome = showChrome,
+                hasPublishedRendering = rendering is RenderingResolution.Available,
+            ),
+            read = !unread,
+        )
+        when (rendering) {
+            null -> addCentered(
+                ProgressBar(context).apply {
+                    indeterminateTintList = ColorStateList.valueOf(materialTheme.primary)
+                },
+            )
             is RenderingResolution.Unavailable -> addCentered(
                 TextView(context).apply {
                     setText(R.string.engage_message_center_unavailable)
+                    setTextColor(materialTheme.onSurfaceVariant)
                     gravity = Gravity.CENTER
                     setPadding(dp(24), dp(24), dp(24), dp(24))
                 },
             )
             is RenderingResolution.Available -> runCatching {
-                createDivView(item.entry, rendering)
+                createDivView(entryId, rendering)
             }.onSuccess { view ->
                 divView = view
-                addView(view, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+                contentRendered = true
+                addView(
+                    view,
+                    LayoutParams(
+                        LayoutParams.MATCH_PARENT,
+                        if (surface == InboxRenderingSurface.DETAIL) LayoutParams.MATCH_PARENT else LayoutParams.WRAP_CONTENT,
+                    ),
+                )
                 EngageLogger.debug(
                     "MessageCenter.DivKit",
-                    "rendering bound entryId=${item.entry.id} revision=${rendering.snapshot.revision}",
+                    "rendering bound entryId=$entryId surface=$surface revision=${rendering.snapshot.revision}",
                 )
             }.onFailure { error ->
-                EngageLogger.error("MessageCenter.DivKit", "rendering failed entryId=${item.entry.id}", error)
+                applyNativeChrome(enabled = showChrome, read = !unread)
+                EngageLogger.error("MessageCenter.DivKit", "rendering failed entryId=$entryId surface=$surface", error)
+                onRenderError?.invoke(error)
                 addCentered(
                     TextView(context).apply {
                         setText(R.string.engage_message_center_unavailable)
+                        setTextColor(materialTheme.onSurfaceVariant)
                         gravity = Gravity.CENTER
                         setPadding(dp(24), dp(24), dp(24), dp(24))
                     },
                 )
             }
         }
-        if (item.entry.readAt == null) addUnreadIndicator()
+        if (showChrome && unread) addUnreadIndicator()
     }
 
     fun recycle() {
-        EngageLogger.verbose("MessageCenter.DivKit", "item recycled entryId=${boundItem?.entry?.id}")
-        boundItem = null
+        EngageLogger.verbose("MessageCenter.DivKit", "item recycled entryId=$boundEntryId surface=$surface")
+        boundEntryId = null
+        reportContentVisibility = false
+        contentRendered = false
+        visibilityReported = false
         divView?.cleanup()
         divView = null
         removeAllViews()
@@ -114,12 +170,12 @@ internal class InboxDivKitView(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        EngageLogger.verbose("MessageCenter.DivKit", "item attached entryId=${boundItem?.entry?.id}")
+        EngageLogger.verbose("MessageCenter.DivKit", "item attached entryId=$boundEntryId surface=$surface")
         viewTreeObserver.addOnPreDrawListener(preDrawListener)
     }
 
     override fun onDetachedFromWindow() {
-        EngageLogger.verbose("MessageCenter.DivKit", "item detached entryId=${boundItem?.entry?.id}")
+        EngageLogger.verbose("MessageCenter.DivKit", "item detached entryId=$boundEntryId surface=$surface")
         if (viewTreeObserver.isAlive) viewTreeObserver.removeOnPreDrawListener(preDrawListener)
         super.onDetachedFromWindow()
     }
@@ -130,14 +186,14 @@ internal class InboxDivKitView(
     }
 
     private fun createDivView(
-        entry: InboxEntry,
+        entryId: InboxEntryId,
         rendering: RenderingResolution.Available,
     ): Div2View {
         EngageLogger.debug(
             "MessageCenter.DivKit",
-            "DivKit parsing entryId=${entry.id} revision=${rendering.snapshot.revision}",
+            "DivKit parsing entryId=$entryId surface=$surface revision=${rendering.snapshot.revision}",
         )
-        val json = JSONObject(rendering.snapshot.document.toString())
+        val json = JSONObject(rendering.snapshot.requireSurface(surface).toString())
         val environment = DivParsingEnvironment(ParsingErrorLogger.LOG)
         json.optJSONObject("templates")?.let(environment::parseTemplates)
         val card = json.optJSONObject("card") ?: json
@@ -149,22 +205,22 @@ internal class InboxDivKitView(
         appearanceVariable = variable
         val variableController = DivVariableController().apply { putOrUpdate(variable) }
         val configuration = DivConfiguration.Builder(CoilDivImageLoader(context))
-            .actionHandler(InboxDivActionHandler(entry, scope, actionRouter))
+            .actionHandler(InboxDivActionHandler(entryId, scope, actionRouter))
             .divVariableController(variableController)
             .enableAccessibility(true)
             .build()
         val divContext = Div2Context(ContextThemeWrapper(context, context.theme), configuration)
         return Div2View(divContext, null, 0).apply {
-            check(setData(data, DivDataTag("inbox:${entry.id.value}:${rendering.snapshot.revision}"))) {
+            check(setData(data, DivDataTag("inbox:${entryId.value}:${surface.name}:${rendering.snapshot.revision}"))) {
                 "DivKit rejected the Inbox snapshot"
             }
-            EngageLogger.debug("MessageCenter.DivKit", "DivKit data accepted entryId=${entry.id}")
+            EngageLogger.debug("MessageCenter.DivKit", "DivKit data accepted entryId=$entryId surface=$surface")
         }
     }
 
     private fun reportVisibilityIfNeeded() {
-        val item = boundItem ?: return
-        if (visibilityReported || item.entry.readAt != null || item.rendering !is RenderingResolution.Available) return
+        val entryId = boundEntryId ?: return
+        if (!shouldReportContentVisibility(surface, reportContentVisibility, contentRendered) || visibilityReported) return
         if (!isShown || width <= 0 || height <= 0) return
         val visible = Rect()
         if (!getGlobalVisibleRect(visible)) return
@@ -172,8 +228,11 @@ internal class InboxDivKitView(
         val totalArea = width.toLong() * height.toLong()
         if (totalArea > 0 && visibleArea * 2 >= totalArea) {
             visibilityReported = true
-            EngageLogger.info("MessageCenter.DivKit", "entry visibility threshold reached entryId=${item.entry.id}")
-            scope.launch { actionRouter.markOpened(item.entry.id) }
+            EngageLogger.info(
+                "MessageCenter.DivKit",
+                "content visibility threshold reached entryId=$entryId surface=$surface",
+            )
+            onContentVisible?.invoke(entryId)
         }
     }
 
@@ -190,7 +249,7 @@ internal class InboxDivKitView(
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = dp(2).toFloat()
-                    setColor(ContextCompat.getColor(context, R.color.engage_message_center_accent))
+                    setColor(materialTheme.primary)
                 }
                 contentDescription = context.getString(R.string.engage_message_center_unread)
             },
@@ -200,7 +259,7 @@ internal class InboxDivKitView(
             View(context).apply {
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
-                    setColor(ContextCompat.getColor(context, R.color.engage_message_center_accent))
+                    setColor(materialTheme.primary)
                 }
                 importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
             },
@@ -211,20 +270,21 @@ internal class InboxDivKitView(
         )
     }
 
+    private fun applyNativeChrome(enabled: Boolean, read: Boolean) {
+        background = if (enabled) cardBackground(read) else null
+        clipToOutline = enabled
+        elevation = if (enabled) dp(2).toFloat() else 0f
+    }
+
     private fun cardBackground(read: Boolean) = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
-        cornerRadius = dp(20).toFloat()
-        setColor(
-            ContextCompat.getColor(
-                context,
-                if (read) R.color.engage_message_center_surface_read
-                else R.color.engage_message_center_surface,
-            ),
-        )
-        setStroke(dp(1), ContextCompat.getColor(context, R.color.engage_message_center_outline))
+        cornerRadius = dp(layout.itemCornerRadiusDp)
+        setColor(if (read) materialTheme.surfaceContainer else materialTheme.surfaceContainerLow)
+        setStroke(dp(1), materialTheme.outlineVariant)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Float): Float = value * resources.displayMetrics.density
 }
 
 internal const val MESSAGE_CENTER_ENGAGE_APPEARANCE_VARIABLE = "engage_appearance"
@@ -241,8 +301,19 @@ internal fun messageCenterDivKitAppearanceValue(uiMode: Int): MessageCenterDivKi
         MessageCenterDivKitAppearanceValue.SYSTEM_LIGHT
     }
 
+internal fun shouldReportContentVisibility(
+    surface: InboxRenderingSurface,
+    requested: Boolean,
+    rendered: Boolean,
+): Boolean = requested && rendered && surface == InboxRenderingSurface.DETAIL
+
+internal fun shouldApplyMessageCenterNativeChrome(
+    showChrome: Boolean,
+    hasPublishedRendering: Boolean,
+): Boolean = showChrome && !hasPublishedRendering
+
 private class InboxDivActionHandler(
-    private val entry: InboxEntry,
+    private val entryId: InboxEntryId,
     private val scope: CoroutineScope,
     private val router: InboxActionRouter,
 ) : DivActionHandler() {
@@ -250,18 +321,18 @@ private class InboxDivActionHandler(
         actionUrl ?: return false
         EngageLogger.info(
             "MessageCenter.DivKit",
-            "DivKit action entryId=${entry.id} scheme=${actionUrl.scheme} host=${actionUrl.host}",
+            "DivKit action entryId=$entryId scheme=${actionUrl.scheme} host=${actionUrl.host}",
         )
         if (router.supports(actionUrl)) {
             scope.launch {
-                runCatching { router.handle(actionUrl, entry.id) }
+                runCatching { router.handle(actionUrl, entryId) }
                     .onFailure { error ->
-                        EngageLogger.error("MessageCenter.DivKit", "action failed entryId=${entry.id}", error)
+                        EngageLogger.error("MessageCenter.DivKit", "action failed entryId=$entryId", error)
                     }
             }
             return true
         }
-        scope.launch { router.markOpened(entry.id) }
+        scope.launch { router.markOpened(entryId) }
         return super.handleActionUrl(actionUrl, view)
     }
 }

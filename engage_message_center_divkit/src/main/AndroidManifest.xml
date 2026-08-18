@@ -13,5 +13,10 @@
             android:label="@string/engage_message_center_title"
             android:launchMode="singleTop"
             android:theme="@style/EngageMessageCenterTheme" />
+        <activity
+            android:name="io.engage.sdk.messagecenter.divkit.render.EngageMessageCenterDetailActivity"
+            android:exported="false"
+            android:label="@string/engage_message_center_detail_title"
+            android:theme="@style/EngageMessageCenterTheme" />
     </application>
 </manifest>

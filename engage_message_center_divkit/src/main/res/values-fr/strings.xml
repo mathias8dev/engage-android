@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="engage_message_center_title">Messages</string>
+    <string name="engage_message_center_detail_title">Message</string>
+    <string name="engage_message_center_back">Retour</string>
+    <string name="engage_message_center_filter_all">Tous</string>
+    <string name="engage_message_center_filter_unread">Non lus</string>
+    <string name="engage_message_center_header_summary">%1$s · %2$s</string>
+    <string name="engage_message_center_empty_title">Vous avez tout lu</string>
+    <string name="engage_message_center_empty_body">Les mises à jour et messages importants apparaîtront ici.</string>
+    <string name="engage_message_center_no_unread_title">Aucun message non lu</string>
+    <string name="engage_message_center_no_unread_body">Tous les messages de votre boîte de réception ont été lus.</string>
+    <string name="engage_message_center_refresh">Actualiser</string>
+    <string name="engage_message_center_retry_title">Messages indisponibles</string>
+    <string name="engage_message_center_retry">Impossible d\'actualiser vos messages. Réessayez.</string>
+    <string name="engage_message_center_rendering_retry">Certains messages n\'ont pas pu être affichés. Balayez vers le bas pour réessayer.</string>
+    <string name="engage_message_center_unavailable">Ce message ne peut pas être affiché.</string>
+    <string name="engage_message_center_unread">Message non lu</string>
+    <string name="engage_message_center_delete">Supprimer</string>
+    <string name="engage_message_center_delete_title">Supprimer ce message ?</string>
+    <string name="engage_message_center_delete_body">Il sera supprimé de votre centre de messages sur tous les appareils synchronisés.</string>
+    <string name="engage_message_center_delete_failed">Ce message n\'a pas pu être supprimé. Réessayez.</string>
+    <plurals name="engage_message_center_unread_count">
+        <item quantity="one">%d non lu</item>
+        <item quantity="other">%d non lus</item>
+    </plurals>
+    <plurals name="engage_message_center_message_count">
+        <item quantity="one">%d message</item>
+        <item quantity="other">%d messages</item>
+    </plurals>
+</resources>

@@ -144,6 +144,60 @@ class DefaultPushTest {
     }
 
     @Test
+    fun `a delivery is processed only once across push instances`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        clearState(application)
+        val context = FakeModuleContext(application, backgroundScope, pushConfig())
+        var notifications = 0
+        val first = DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+            notificationObserver = { notifications += 1 },
+        )
+        runCurrent()
+
+        first.processMessage(pushPayload())
+        val second = DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+            notificationObserver = { notifications += 1 },
+        )
+        runCurrent()
+        second.processMessage(pushPayload())
+
+        assertEquals(1, notifications)
+        assertEquals(
+            1,
+            context.operations.filterIsInstance<EngageModuleOperation.PushReceipt>()
+                .count { it.deliveryId == "delivery-1" },
+        )
+        clearState(application)
+    }
+
+    @Test
+    fun `a push targeting another installation is ignored`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        clearState(application)
+        val context = FakeModuleContext(application, backgroundScope, pushConfig())
+        var notifications = 0
+        val push = DefaultPush(
+            moduleContext = context,
+            tokenProvider = PushTokenProvider { "fcm-token" },
+            permissionProvider = PushPermissionProvider { PushPermission.AUTHORIZED },
+            notificationObserver = { notifications += 1 },
+        )
+        runCurrent()
+
+        push.processMessage(pushPayload().plus("engage_installation_id" to "installation-2"))
+
+        assertEquals(0, notifications)
+        assertTrue(context.operations.filterIsInstance<EngageModuleOperation.PushReceipt>().isEmpty())
+        clearState(application)
+    }
+
+    @Test
     fun `notification category actions receive action arguments instead of custom data`() = runTest {
         val application = ApplicationProvider.getApplicationContext<Application>()
         clearState(application)
@@ -308,6 +362,7 @@ class DefaultPushTest {
     private fun pushPayload(actionType: String = "CUSTOM", actionValue: String? = null) = mapOf(
         "engage_delivery_id" to "delivery-1",
         "engage_message_id" to "message-1",
+        "engage_installation_id" to "installation-1",
         "engage_action_type" to actionType,
         "engage_action_value" to (actionValue ?: if (actionType == "CUSTOM") {
             "open_order"

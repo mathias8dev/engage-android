@@ -45,6 +45,11 @@ public data class InboxPagerState(
     val error: InboxError? = null,
 )
 
+public enum class InboxSortOrder {
+    NEWEST_FIRST,
+    OLDEST_FIRST,
+}
+
 public interface InboxPager : AutoCloseable {
     val state: StateFlow<InboxPagerState>
     suspend fun refresh()
@@ -54,7 +59,7 @@ public interface InboxPager : AutoCloseable {
 
 public interface Inbox {
     val unreadCount: StateFlow<Int>
-    fun pager(pageSize: Int = 20): InboxPager
+    fun pager(pageSize: Int = 20, sortOrder: InboxSortOrder = InboxSortOrder.NEWEST_FIRST): InboxPager
     suspend fun markRead(entryId: InboxEntryId)
     suspend fun markUnread(entryId: InboxEntryId)
     suspend fun markAllRead()
@@ -66,16 +71,42 @@ public interface MessageCenter {
 }
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public enum class InboxRenderer {
+    DIVKIT,
+}
+
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public enum class InboxRenderingSurface {
+    SUMMARY,
+    DETAIL,
+}
+
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public data class InboxRenderingSnapshot(
     val entryId: InboxEntryId,
-    val renderer: String,
+    val renderer: InboxRenderer,
     val revision: Long,
-    val document: JsonObject,
+    val surfaces: Map<InboxRenderingSurface, JsonObject>,
+    val expiresAt: Instant? = null,
+) {
+    public fun requireSurface(surface: InboxRenderingSurface): JsonObject =
+        requireNotNull(surfaces[surface]) { "Inbox rendering is missing ${surface.name}" }
+}
+
+/** Identity-scoped Inbox state consumed by official rendering artifacts. */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public data class MessageCenterPresentationState(
+    val lifecycleRevision: Long,
+    val generation: Long,
+    val isEnabled: Boolean,
+    val entryIds: Set<InboxEntryId>,
+    val deletedEntryIds: Set<InboxEntryId> = emptySet(),
 )
 
 /** Internal bridge consumed only by official Message Center UI artifacts. */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public interface MessageCenterRenderingSupport {
+    public val presentationState: StateFlow<MessageCenterPresentationState>
     public suspend fun resolveRenderings(entryIds: List<InboxEntryId>): List<InboxRenderingSnapshot>
     public suspend fun executeAction(name: String, arguments: JsonObject): Boolean
 }

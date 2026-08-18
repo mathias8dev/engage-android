@@ -4,7 +4,10 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import io.engage.sdk.InboxEntryId
 import io.engage.sdk.InboxRenderingSnapshot
+import io.engage.sdk.InboxRenderer
+import io.engage.sdk.InboxRenderingSurface
 import io.engage.sdk.MessageCenterRenderingSupport
+import io.engage.sdk.MessageCenterPresentationState
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,12 +76,22 @@ private class FakeRenderingSupport(
     private val afterResolution: () -> Unit = {},
 ) : MessageCenterRenderingSupport {
     var calls = 0
+    override val presentationState = MutableStateFlow(
+        MessageCenterPresentationState(0, 7, true, emptySet()),
+    )
 
     override suspend fun resolveRenderings(entryIds: List<InboxEntryId>): List<InboxRenderingSnapshot> {
         calls += 1
         afterResolution()
         return entryIds.firstOrNull()?.let { entryId ->
-            listOf(InboxRenderingSnapshot(entryId, "DIVKIT", 1, buildJsonObject {}))
+            listOf(
+                InboxRenderingSnapshot(
+                    entryId,
+                    InboxRenderer.DIVKIT,
+                    1,
+                    InboxRenderingSurface.entries.associateWith { buildJsonObject {} },
+                ),
+            )
         }.orEmpty()
     }
 

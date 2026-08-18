@@ -29,6 +29,7 @@ import io.engage.sdk.core.data.OkHttpMobileEdgeApi
 import io.engage.sdk.core.data.SqliteOperationOutbox
 import io.engage.sdk.core.data.SqliteSyncStore
 import io.engage.sdk.core.data.migrateLegacyCoreStorage
+import io.engage.sdk.core.data.legacyEndpointStorageScope
 import io.engage.sdk.core.data.storageScope
 import io.engage.sdk.core.domain.DeviceMetadata
 import io.engage.sdk.core.domain.OperationType
@@ -72,9 +73,14 @@ internal class CoreRuntime(
     override val config: EngageConfig,
 ) : EngageModuleContext, DefaultLifecycleObserver {
     override val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val persistenceScope = storageScope(config.appKey, config.endpoint)
+    private val persistenceScope = storageScope(config.appKey)
     init {
-        migrateLegacyCoreStorage(applicationContext, persistenceScope)
+        migrateLegacyCoreStorage(
+            applicationContext,
+            persistenceScope,
+            listOf(config.endpoint) + config.legacyEndpoints,
+            config.appKey,
+        )
     }
     private val sessions = AndroidSessionStore(applicationContext, persistenceScope)
     private val outbox = SqliteOperationOutbox(applicationContext, databaseScope = persistenceScope)
@@ -140,6 +146,7 @@ internal class CoreRuntime(
         outbox,
         features.enabled,
         scope,
+        refreshRemoteState = ::refresh,
     )
     private val privacyDelegate = DefaultPrivacy(
         config.endpoint,

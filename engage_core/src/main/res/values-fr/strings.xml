@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="engage_preference_center_title">Préférences de communication</string>
+    <string name="engage_preference_center_close">Fermer les préférences de communication</string>
+    <string name="engage_preference_center_close_button">Fermer</string>
+    <string name="engage_preference_center_unavailable_title">Aucune préférence pour le moment</string>
+    <string name="engage_preference_center_unavailable_body">Cette application n’a pas encore publié de préférences de communication. Vous pouvez fermer cet écran et continuer à utiliser l’application.</string>
+</resources>

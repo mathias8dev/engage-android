@@ -2,6 +2,7 @@ package io.engage.sdk.messagecenter.data
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.messagecenter.domain.InboxScope
 import io.engage.sdk.messagecenter.domain.MutationResult
 import io.engage.sdk.messagecenter.domain.MutationStatus
@@ -81,12 +82,89 @@ class SqliteInboxStoreTest {
         val batch = requireNotNull(store.reserve(7))
         store.settle(batch, listOf(MutationResult("delete-1", MutationStatus.ACCEPTED, null, null)))
 
-        store.savePage(8, 20, null, page(entry("new", read = false)))
         store.activateGeneration(8)
+        store.savePage(8, 20, null, page(entry("new", read = false)))
 
         assertEquals(setOf("new"), store.snapshot.value.entries.keys)
         assertEquals(listOf("new"), store.cachedWindow(8, 20).entryIds)
         assertTrue(store.cachedWindow(7, 20).entryIds.isEmpty())
+    }
+
+    @Test
+    fun `cached windows are isolated by sort order`() = runTest {
+        store.activateGeneration(7)
+        store.savePage(
+            7,
+            20,
+            null,
+            page(entry("newest", read = false)),
+            InboxSortOrder.NEWEST_FIRST,
+        )
+        store.savePage(
+            7,
+            20,
+            null,
+            page(entry("oldest", read = false)),
+            InboxSortOrder.OLDEST_FIRST,
+        )
+
+        assertEquals(
+            listOf("newest"),
+            store.cachedWindow(7, 20, InboxSortOrder.NEWEST_FIRST).entryIds,
+        )
+        assertEquals(
+            listOf("oldest"),
+            store.cachedWindow(7, 20, InboxSortOrder.OLDEST_FIRST).entryIds,
+        )
+    }
+
+    @Test
+    fun `stale network writes cannot resurrect data after a generation transition`() = runTest {
+        store.activateGeneration(7)
+        assertTrue(store.savePage(7, 20, null, page(entry("old", read = false))))
+        assertTrue(store.enqueue(
+            PendingMutation("read-old", 7, MutationType.MARK_READ, "old", Instant.EPOCH, null),
+        ))
+        val oldBatch = requireNotNull(store.reserve(7))
+
+        store.activateGeneration(8)
+
+        assertFalse(store.savePage(7, 20, null, page(entry("late-old", read = false))))
+        assertFalse(store.enqueue(
+            PendingMutation("late-read", 7, MutationType.MARK_READ, "late-old", Instant.EPOCH, null),
+        ))
+        store.settle(oldBatch, listOf(MutationResult("read-old", MutationStatus.ACCEPTED, null, null)))
+
+        store.activateGeneration(7)
+        assertTrue(store.snapshot.value.entries.isEmpty())
+        assertTrue(store.cachedWindow(7, 20).entryIds.isEmpty())
+        assertEquals(null, store.reserve(7))
+    }
+
+    @Test
+    fun `stale network writes cannot repopulate an inbox after wipe`() = runTest {
+        store.activateGeneration(7)
+        store.clear()
+
+        assertFalse(store.savePage(7, 20, null, page(entry("late-old", read = false))))
+        assertFalse(store.enqueue(
+            PendingMutation("late-read", 7, MutationType.MARK_READ, "late-old", Instant.EPOCH, null),
+        ))
+
+        store.activateGeneration(7)
+        assertTrue(store.snapshot.value.entries.isEmpty())
+        assertEquals(null, store.reserve(7))
+    }
+
+    @Test
+    fun `uncached pending deletion is exposed to presentation consumers`() = runTest {
+        store.activateGeneration(7)
+
+        assertTrue(store.enqueue(
+            PendingMutation("delete-direct", 7, MutationType.DELETE, "direct-entry", Instant.EPOCH, null),
+        ))
+
+        assertEquals(setOf("direct-entry"), store.snapshot.value.pendingDeletedEntryIds)
     }
 
     @Test

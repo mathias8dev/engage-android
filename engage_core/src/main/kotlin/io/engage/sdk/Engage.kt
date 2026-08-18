@@ -81,6 +81,14 @@ public object Engage {
 public data class EngageConfig(
     val appKey: String,
     val endpoint: URI = URI.create("https://api.engage.io/v1/"),
+    /**
+     * Previous API endpoints whose pre-2.1 endpoint-scoped storage belongs to this App Key.
+     *
+     * This is only needed when changing the endpoint in the same release that adopts stable
+     * App-Key-scoped storage. Explicit endpoints keep migration deterministic when a process hosts
+     * more than one Engage application. The current [endpoint] is always considered automatically.
+     */
+    val legacyEndpoints: List<URI> = emptyList(),
     val push: PushConfig = PushConfig(),
     val logLevel: EngageLogLevel = EngageLogLevel.INFO,
 )

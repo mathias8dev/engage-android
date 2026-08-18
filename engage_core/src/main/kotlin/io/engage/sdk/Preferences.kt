@@ -24,9 +24,36 @@ public data class SubscriptionPreference(
     val installationChoice: Boolean?,
 )
 
+public enum class PreferenceCenterAppearance {
+    LIGHT,
+    DARK,
+}
+
+public data class PreferenceCenterMaterialTheme(
+    val appearance: PreferenceCenterAppearance,
+    val primary: Int,
+    val onPrimary: Int,
+    val primaryContainer: Int,
+    val onPrimaryContainer: Int,
+    val surface: Int,
+    val surfaceContainerLow: Int,
+    val surfaceContainer: Int,
+    val onSurface: Int,
+    val onSurfaceVariant: Int,
+    val outlineVariant: Int,
+    val error: Int,
+    val onError: Int,
+)
+
+public data class PreferenceCenterDisplayOptions(
+    val key: String? = null,
+    val localeLanguageTag: String? = null,
+    val materialTheme: PreferenceCenterMaterialTheme? = null,
+)
+
 public interface PreferenceCenter {
     fun center(): StateFlow<PreferenceCenterSnapshot?>
     fun center(key: String): StateFlow<PreferenceCenterSnapshot?>
-    fun display()
-    fun display(key: String)
+    suspend fun refresh()
+    fun display(options: PreferenceCenterDisplayOptions = PreferenceCenterDisplayOptions())
 }

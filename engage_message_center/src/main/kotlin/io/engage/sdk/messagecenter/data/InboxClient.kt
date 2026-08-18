@@ -1,6 +1,9 @@
 package io.engage.sdk.messagecenter.data
 
 import io.engage.sdk.messagecenter.domain.InboxRendering
+import io.engage.sdk.InboxRenderer
+import io.engage.sdk.InboxRenderingSurface
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.messagecenter.domain.InboxScope
 import io.engage.sdk.messagecenter.domain.MutationResult
 import io.engage.sdk.messagecenter.domain.MutationStatus
@@ -26,14 +29,22 @@ import java.io.IOException
 import java.time.Instant
 
 internal class InboxClient(private val context: EngageModuleContext) {
-    suspend fun page(cursor: String?, pageSize: Int): RemoteInboxPage {
-        context.logDebug("MessageCenter.Network", "page request pageSize=$pageSize hasCursor=${cursor != null}")
+    suspend fun page(
+        cursor: String?,
+        pageSize: Int,
+        sortOrder: InboxSortOrder = InboxSortOrder.NEWEST_FIRST,
+    ): RemoteInboxPage {
+        context.logDebug(
+            "MessageCenter.Network",
+            "page request pageSize=$pageSize sortOrder=$sortOrder hasCursor=${cursor != null}",
+        )
         val response = context.authorizedRequest(
             EngageHttpRequest(
                 method = EngageHttpMethod.GET,
                 path = "sdk/inbox",
                 query = buildMap {
                     put("pageSize", pageSize.toString())
+                    put("sortOrder", sortOrder.name)
                     cursor?.let { put("cursor", it) }
                 },
             ),
@@ -138,9 +149,15 @@ internal class InboxClient(private val context: EngageModuleContext) {
             val rendering = element as? JsonObject ?: invalidResponse("Inbox rendering must be an object")
             InboxRendering(
                 entryId = rendering.requiredString("entryId"),
-                renderer = rendering.requiredString("renderer"),
+                renderer = rendering.requiredEnum("renderer"),
                 revision = rendering.long("revision") ?: invalidResponse("Rendering revision is missing"),
-                document = rendering["document"] as? JsonObject ?: invalidResponse("Rendering document is missing"),
+                surfaces = (rendering["surfaces"] as? JsonObject)?.let { surfaces ->
+                    InboxRenderingSurface.entries.associateWith { surface ->
+                        surfaces[surface.name] as? JsonObject
+                            ?: invalidResponse("Rendering ${surface.name} surface is missing")
+                    }
+                } ?: invalidResponse("Rendering surfaces are missing"),
+                expiresAt = rendering.instant("expiresAt"),
             )
         }
         if (
@@ -155,7 +172,7 @@ internal class InboxClient(private val context: EngageModuleContext) {
         if (renderings.any { it.revision < 1 }) invalidResponse("Rendering revision must be positive")
         context.logInfo(
             "MessageCenter.Network",
-            "renderings received count=${renderings.size} renderers=${renderings.map(InboxRendering::renderer).distinct().sorted()}",
+            "renderings received count=${renderings.size} renderers=${renderings.map(InboxRendering::renderer).distinct().sortedBy { it.name }}",
         )
         return renderings
     }
@@ -203,4 +220,8 @@ private inline fun <reified T : Enum<T>> JsonObject.enum(key: String, default: T
     string(key)?.let { raw ->
         runCatching { enumValueOf<T>(raw) }.getOrElse { invalidResponse("Invalid $key") }
     } ?: default
+private inline fun <reified T : Enum<T>> JsonObject.requiredEnum(key: String): T =
+    requiredString(key).let { raw ->
+        runCatching { enumValueOf<T>(raw) }.getOrElse { invalidResponse("Invalid $key") }
+    }
 private fun invalidResponse(message: String): Nothing = throw InboxInvalidResponseException(message)

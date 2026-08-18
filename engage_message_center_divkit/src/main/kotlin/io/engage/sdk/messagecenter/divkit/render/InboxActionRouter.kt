@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonObject
 internal class InboxActionRouter(
     private val inbox: Inbox,
     private val renderingSupport: MessageCenterRenderingSupport,
+    private val onDeleted: ((InboxEntryId) -> Unit)? = null,
 ) {
     fun supports(uri: Uri): Boolean = uri.scheme == ENGAGE_SCHEME && when (uri.host) {
         MARK_READ, MARK_UNREAD, DELETE -> true
@@ -39,6 +40,7 @@ internal class InboxActionRouter(
             }
             DELETE -> {
                 inbox.delete(entryId)
+                onDeleted?.invoke(entryId)
                 true
             }
             ACTION -> {

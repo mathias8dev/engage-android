@@ -3,6 +3,9 @@ package io.engage.sdk.messagecenter.data
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import io.engage.sdk.EngageConfig
+import io.engage.sdk.InboxRenderer
+import io.engage.sdk.InboxRenderingSurface
+import io.engage.sdk.InboxSortOrder
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.messagecenter.domain.MutationType
@@ -43,7 +46,22 @@ class InboxClientTest {
         assertEquals("order.shipped", page.entries.single().key)
         assertEquals("42", page.entries.single().payload["orderId"].toString().trim('"'))
         assertEquals(3, page.unreadCount)
-        assertEquals(mapOf("pageSize" to "20", "cursor" to "next/+"), context.request?.query)
+        assertEquals(
+            mapOf("pageSize" to "20", "sortOrder" to "NEWEST_FIRST", "cursor" to "next/+"),
+            context.request?.query,
+        )
+    }
+
+    @Test
+    fun `page forwards oldest first ordering`() = runTest {
+        val context = ClientContext(this).apply { response = response(PAGE) }
+
+        InboxClient(context).page(cursor = null, pageSize = 10, sortOrder = InboxSortOrder.OLDEST_FIRST)
+
+        assertEquals(
+            mapOf("pageSize" to "10", "sortOrder" to "OLDEST_FIRST"),
+            context.request?.query,
+        )
     }
 
     @Test
@@ -71,8 +89,13 @@ class InboxClientTest {
         val rendering = InboxClient(context).renderings(listOf("entry-1", "entry-1")).single()
 
         assertEquals("entry-1", rendering.entryId)
-        assertEquals("DIVKIT", rendering.renderer)
+        assertEquals(InboxRenderer.DIVKIT, rendering.renderer)
         assertEquals(2, rendering.revision)
+        assertEquals(Instant.parse("2099-01-01T00:00:00Z"), rendering.expiresAt)
+        assertEquals(
+            setOf(InboxRenderingSurface.SUMMARY, InboxRenderingSurface.DETAIL),
+            rendering.surfaces.keys,
+        )
         assertEquals(1, (context.request?.body?.get("entryIds") as JsonArray).size)
     }
 
@@ -82,6 +105,26 @@ class InboxClientTest {
             runTest {
                 val context = ClientContext(this).apply { response = response(RENDERING) }
                 InboxClient(context).renderings(listOf("another-entry"))
+            }
+        }
+    }
+
+    @Test
+    fun `rendering resolution rejects an incomplete surface set`() {
+        assertThrows(InboxInvalidResponseException::class.java) {
+            runTest {
+                val context = ClientContext(this).apply { response = response(RENDERING_WITHOUT_DETAIL) }
+                InboxClient(context).renderings(listOf("entry-1"))
+            }
+        }
+    }
+
+    @Test
+    fun `rendering resolution requires its closed renderer vocabulary`() {
+        assertThrows(InboxInvalidResponseException::class.java) {
+            runTest {
+                val context = ClientContext(this).apply { response = response(RENDERING_WITHOUT_RENDERER) }
+                InboxClient(context).renderings(listOf("entry-1"))
             }
         }
     }
@@ -107,8 +150,30 @@ class InboxClientTest {
         const val RENDERING = """
             {
               "renderings":[{
+                "entryId":"entry-1","renderer":"DIVKIT","revision":2,"expiresAt":"2099-01-01T00:00:00Z",
+                "surfaces":{
+                  "SUMMARY":{"card":{"log_id":"inbox-entry-1-summary","states":[]}},
+                  "DETAIL":{"card":{"log_id":"inbox-entry-1-detail","states":[]}}
+                }
+              }]
+            }
+        """
+        const val RENDERING_WITHOUT_DETAIL = """
+            {
+              "renderings":[{
                 "entryId":"entry-1","renderer":"DIVKIT","revision":2,
-                "document":{"card":{"log_id":"inbox-entry-1","states":[]}}
+                "surfaces":{"SUMMARY":{"card":{"log_id":"summary","states":[]}}}
+              }]
+            }
+        """
+        const val RENDERING_WITHOUT_RENDERER = """
+            {
+              "renderings":[{
+                "entryId":"entry-1","revision":2,
+                "surfaces":{
+                  "SUMMARY":{"card":{"log_id":"summary","states":[]}},
+                  "DETAIL":{"card":{"log_id":"detail","states":[]}}
+                }
               }]
             }
         """

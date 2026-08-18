@@ -44,6 +44,7 @@ class DefaultPreferenceCenterTest {
             outbox,
             MutableStateFlow(setOf(SdkFeature.PREFERENCES)),
             backgroundScope,
+            refreshRemoteState = {},
         )
 
         val projection = center.center()
@@ -72,6 +73,24 @@ class DefaultPreferenceCenterTest {
             it.sections.single().subscriptions.single().profileChoices?.get(Channel.EMAIL) == false
         }
         assertEquals(false, updated.sections.single().subscriptions.single().profileChoices?.get(Channel.EMAIL))
+    }
+
+    @Test
+    fun `refresh delegates to the synchronized core refresh`() = runTest {
+        var refreshCount = 0
+        val center = DefaultPreferenceCenter(
+            ApplicationProvider.getApplicationContext(),
+            FakeSessions(),
+            FakeSyncStore(snapshot()),
+            FakeOutbox(),
+            MutableStateFlow(setOf(SdkFeature.PREFERENCES)),
+            backgroundScope,
+            refreshRemoteState = { refreshCount += 1 },
+        )
+
+        center.refresh()
+
+        assertEquals(1, refreshCount)
     }
 
     private fun snapshot() = StoredSyncSnapshot(

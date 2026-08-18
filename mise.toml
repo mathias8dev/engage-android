@@ -10,6 +10,6 @@ description = "Build, test, and verify every Android publication"
 run = "./gradlew clean build publishToMavenLocal"
 
 [tasks.release]
-description = "Push main and let CI create the versioned GitHub/JitPack release"
-confirm = "Push the Engage Android release branch?"
-run = "git push origin main"
+description = "Cut and verify release/<version> from develop without publishing it"
+confirm = "Create a Git Flow release branch and update its version?"
+run = "./scripts/prepare-release.sh"

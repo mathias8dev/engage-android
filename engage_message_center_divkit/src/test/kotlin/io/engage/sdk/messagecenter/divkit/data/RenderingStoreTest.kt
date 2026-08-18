@@ -4,8 +4,11 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import io.engage.sdk.InboxEntryId
 import io.engage.sdk.InboxRenderingSnapshot
+import io.engage.sdk.InboxRenderer
+import io.engage.sdk.InboxRenderingSurface
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -15,6 +18,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.time.Instant
 
 @RunWith(RobolectricTestRunner::class)
 class RenderingStoreTest {
@@ -47,9 +51,11 @@ class RenderingStoreTest {
                     RenderingResolution.Available(
                         InboxRenderingSnapshot(
                             availableId,
-                            "DIVKIT",
+                            InboxRenderer.DIVKIT,
                             3,
-                            buildJsonObject { put("card", buildJsonObject {}) },
+                            InboxRenderingSurface.entries.associateWith { surface ->
+                                buildJsonObject { put("surface", surface.name) }
+                            },
                         ),
                     ),
                     RenderingResolution.Unavailable(unavailableId),
@@ -58,7 +64,16 @@ class RenderingStoreTest {
         )
 
         val cached = store.read(7, listOf(availableId, unavailableId))
-        assertEquals(3, (cached[availableId] as RenderingResolution.Available).snapshot.revision)
+        val snapshot = (cached[availableId] as RenderingResolution.Available).snapshot
+        assertEquals(3, snapshot.revision)
+        assertEquals(
+            InboxRenderingSurface.SUMMARY.name,
+            snapshot.surfaces.getValue(InboxRenderingSurface.SUMMARY)["surface"]?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            InboxRenderingSurface.DETAIL.name,
+            snapshot.surfaces.getValue(InboxRenderingSurface.DETAIL)["surface"]?.jsonPrimitive?.content,
+        )
         assertTrue(cached[unavailableId] is RenderingResolution.Unavailable)
 
         store.activateGeneration(8)
@@ -86,5 +101,29 @@ class RenderingStoreTest {
             context.deleteDatabase(firstName)
             context.deleteDatabase(secondName)
         }
+    }
+
+    @Test
+    fun `expired direct rendering is evicted even when no inbox page was loaded`() {
+        val entryId = InboxEntryId("direct-entry")
+        store.activateGeneration(7)
+        assertTrue(
+            store.write(
+                7,
+                listOf(
+                    RenderingResolution.Available(
+                        InboxRenderingSnapshot(
+                            entryId,
+                            InboxRenderer.DIVKIT,
+                            1,
+                            InboxRenderingSurface.entries.associateWith { buildJsonObject {} },
+                            Instant.parse("2000-01-01T00:00:00Z"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertTrue(store.read(7, listOf(entryId)).isEmpty())
     }
 }

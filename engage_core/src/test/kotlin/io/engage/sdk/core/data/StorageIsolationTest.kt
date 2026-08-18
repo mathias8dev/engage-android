@@ -7,6 +7,8 @@ import io.engage.sdk.core.domain.InstallationSession
 import io.engage.sdk.core.domain.RevocationEnvelope
 import io.engage.sdk.spi.migrateLegacyDatabase
 import io.engage.sdk.spi.migrateLegacyPreferences
+import io.engage.sdk.spi.migrateScopedDatabase
+import io.engage.sdk.spi.migrateScopedPreferences
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -23,8 +25,8 @@ class StorageIsolationTest {
 
     @Test
     fun `application keys use independent durable sessions`() = runTest {
-        val firstScope = storageScope("eng_app_first", URI.create("https://edge.test/v1/"))
-        val secondScope = storageScope("eng_app_second", URI.create("https://edge.test/v1/"))
+        val firstScope = storageScope("eng_app_first")
+        val secondScope = storageScope("eng_app_second")
         assertNotEquals(firstScope, secondScope)
         val firstSecrets = InMemorySecrets()
         val first = AndroidSessionStore(context, firstScope, firstSecrets)
@@ -41,7 +43,7 @@ class StorageIsolationTest {
 
     @Test
     fun `missing revocation credential cannot poison newer work`() = runTest {
-        val scope = storageScope("eng_app_revocations", URI.create("https://edge.test/v1/"))
+        val scope = storageScope("eng_app_revocations")
         val secrets = InMemorySecrets()
         val store = AndroidRevocationStore(context, scope, secrets)
         store.save(RevocationEnvelope("a-missing", "old-secret"))
@@ -51,6 +53,111 @@ class StorageIsolationTest {
         assertEquals(RevocationEnvelope("b-valid", "new-secret"), store.get())
         store.clear("b-valid")
         assertNull(store.get())
+    }
+
+    @Test
+    fun `endpoint changes preserve the application storage scope`() {
+        val appKey = "eng_app_endpoint_change"
+
+        assertEquals(storageScope(appKey), storageScope(appKey))
+        assertNotEquals(
+            legacyEndpointStorageScope(appKey, URI.create("https://edge-one.test/v1/")),
+            legacyEndpointStorageScope(appKey, URI.create("https://edge-two.test/v1/")),
+        )
+    }
+
+    @Test
+    fun `endpoint scoped preferences migrate once into the stable application scope`() {
+        val id = UUID.randomUUID().toString()
+        val base = "engage_endpoint_scope_$id"
+        val migrationStore = "engage_endpoint_scope_migration_$id"
+        val oldScope = legacyEndpointStorageScope("eng_app_scope", URI.create("https://old-edge.test/v1/"))
+        val newScope = storageScope("eng_app_scope")
+        context.getSharedPreferences(scopedStorageName(base, oldScope), Context.MODE_PRIVATE)
+            .edit()
+            .putString("installation", "installation-1")
+            .commit()
+
+        val targetName = migrateScopedPreferences(context, base, oldScope, newScope, migrationStore)
+
+        val target = context.getSharedPreferences(targetName, Context.MODE_PRIVATE)
+        assertEquals("installation-1", target.getString("installation", null))
+        target.edit().clear().commit()
+
+        migrateScopedPreferences(context, base, oldScope, newScope, migrationStore)
+
+        assertEquals(emptyMap<String, Any>(), target.all)
+    }
+
+    @Test
+    fun `endpoint scoped database migrates once into the stable application scope`() {
+        val id = UUID.randomUUID().toString()
+        val base = "engage_endpoint_database_$id.db"
+        val migrationStore = "engage_endpoint_database_migration_$id"
+        val oldScope = legacyEndpointStorageScope("eng_app_scope", URI.create("https://old-edge.test/v1/"))
+        val newScope = storageScope("eng_app_scope")
+        val source = context.getDatabasePath(scopedStorageName(base, oldScope))
+        source.parentFile?.mkdirs()
+        source.writeText("endpoint-database")
+        java.io.File(source.path + "-wal").writeText("endpoint-wal")
+
+        val targetName = migrateScopedDatabase(context, base, oldScope, newScope, migrationStore)
+
+        val target = context.getDatabasePath(targetName)
+        assertEquals("endpoint-database", target.readText())
+        assertEquals("endpoint-wal", java.io.File(target.path + "-wal").readText())
+        target.writeText("stable-database")
+        java.io.File(target.path + "-wal").delete()
+
+        migrateScopedDatabase(context, base, oldScope, newScope, migrationStore)
+
+        assertEquals("stable-database", target.readText())
+        assertEquals(false, java.io.File(target.path + "-wal").exists())
+    }
+
+    @Test
+    fun `changing endpoint while upgrading preserves prior endpoint storage`() {
+        val appKey = "eng_app_simultaneous_${UUID.randomUUID()}"
+        val oldScope = legacyEndpointStorageScope(appKey, URI.create("https://old-edge.test/v1/"))
+        val oldEndpoint = URI.create("https://old-edge.test/v1/")
+        val currentEndpoint = URI.create("https://new-edge.test/v1/")
+        val stableScope = storageScope(appKey)
+        val source = context.getSharedPreferences(
+            scopedStorageName("engage_core_state", oldScope),
+            Context.MODE_PRIVATE,
+        )
+        source.edit().putString("installation", "installation-before-upgrade").commit()
+
+        migrateLegacyCoreStorage(
+            context,
+            stableScope,
+            endpoints = listOf(currentEndpoint, oldEndpoint),
+            appKey = appKey,
+        )
+
+        val target = context.getSharedPreferences(
+            scopedStorageName("engage_core_state", stableScope),
+            Context.MODE_PRIVATE,
+        )
+        assertEquals("installation-before-upgrade", target.getString("installation", null))
+    }
+
+    @Test
+    fun `interrupted endpoint database migration replaces an incomplete target`() {
+        val id = UUID.randomUUID().toString()
+        val base = "engage_interrupted_endpoint_database_$id.db"
+        val migrationStore = "engage_interrupted_endpoint_database_migration_$id"
+        val oldScope = legacyEndpointStorageScope("eng_app_interrupted", URI.create("https://old-edge.test/v1/"))
+        val stableScope = storageScope("eng_app_interrupted_$id")
+        val source = context.getDatabasePath(scopedStorageName(base, oldScope))
+        val target = context.getDatabasePath(scopedStorageName(base, stableScope))
+        source.parentFile?.mkdirs()
+        source.writeText("complete-endpoint-database")
+        target.writeText("partial")
+
+        migrateScopedDatabase(context, base, oldScope, stableScope, migrationStore)
+
+        assertEquals("complete-endpoint-database", target.readText())
     }
 
     @Test

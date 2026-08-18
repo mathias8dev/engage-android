@@ -3,7 +3,7 @@
 The official native Android SDK for Engage. The repository is a Gradle multi-project build with
 independently consumable artifacts and one atomic release version.
 
-Current release: `2.1.0`.
+Current release: `2.2.0`.
 
 ## Requirements
 
@@ -63,11 +63,11 @@ Then select only the modules required by the application:
 
 ```kotlin
 dependencies {
-    implementation("com.github.mathias8dev.engage-android:engage-android-core:2.1.0")
-    implementation("com.github.mathias8dev.engage-android:engage-android-push-fcm:2.1.0")
-    implementation("com.github.mathias8dev.engage-android:engage-android-in-app:2.1.0")
-    implementation("com.github.mathias8dev.engage-android:engage-android-message-center:2.1.0")
-    implementation("com.github.mathias8dev.engage-android:engage-android-message-center-divkit:2.1.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-core:2.2.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-push-fcm:2.2.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-in-app:2.2.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-message-center:2.2.0")
+    implementation("com.github.mathias8dev.engage-android:engage-android-message-center-divkit:2.2.0")
 }
 ```
 
@@ -144,6 +144,22 @@ host does not manually instantiate them.
 
 Observe `Engage.state` when the application needs to expose SDK initialization diagnostics.
 Development logs use the `Engage` Logcat tag.
+
+When the same release both upgrades from endpoint-scoped SDK storage and changes the API endpoint,
+declare the previous endpoint so Engage can move the correct App Key's durable state:
+
+```kotlin
+import java.net.URI
+
+EngageConfig(
+    appKey = BuildConfig.ENGAGE_APP_KEY,
+    endpoint = URI.create(BuildConfig.ENGAGE_ENDPOINT),
+    legacyEndpoints = listOf(URI.create(BuildConfig.PREVIOUS_ENGAGE_ENDPOINT)),
+)
+```
+
+This one-time migration option is unnecessary when the endpoint is unchanged. It is explicit so a
+process configured with several Engage App Keys never guesses which legacy storage it owns.
 
 ## Push notifications
 
@@ -427,7 +443,7 @@ The Core module includes a ready-to-use Preference Center activity:
 ```kotlin
 Engage.preferenceCenter.display()
 // Or open a specific center:
-Engage.preferenceCenter.display("marketing")
+Engage.preferenceCenter.display(PreferenceCenterDisplayOptions(key = "marketing"))
 ```
 
 For custom UI, observe `center()` or `center(key)` and render the returned sections and subscription
@@ -440,12 +456,53 @@ Add `engage-android-message-center` for the headless inbox. Add
 
 ```kotlin
 Engage.messageCenter.display()
+Engage.messageCenter.display(entryId = entry.id)
 ```
+
+Each published locale contains a compact `SUMMARY` surface and a full `DETAIL` surface. The ready-made
+activity renders `SUMMARY` in the inbox, then opens a native detail screen and renders `DETAIL` when
+the row is selected. The template owns the message content; the SDK owns the navigation chrome and
+marks the entry read only after `DETAIL` is actually visible. Both surfaces are immutable snapshots of the same headless payload and template
+revision.
+
+Applications that own their navigation can embed the same native content without launching an
+Activity:
+
+```kotlin
+val list = EngageMessageCenterListView(
+    context,
+    sortOrder = InboxSortOrder.NEWEST_FIRST,
+    onEntryTap = { entry -> router.openMessage(entry.id) },
+)
+
+val detail = EngageMessageCenterDetailView(
+    context,
+    onUnavailable = router::closeMissingMessage,
+).apply {
+    display(entry.id)
+}
+```
+
+Both views must be closed with their host lifecycle. They contain no toolbar or navigation and share
+the same Inbox store, rendering cache, DivKit runtime, and action router as `display()`.
+The list header presents the synchronized message and unread counts above a compact All/Unread
+segmented filter; bulk read mutations remain available through the headless Inbox API.
+The ready-made list also owns the standard destructive interaction: swipe a message toward the
+start edge, then confirm deletion in a native Material 3 dialog. The dialog consumes the same
+`MessageCenterMaterialTheme` roles as the list (`surfaceContainer`, `onSurface`, `onSurfaceVariant`,
+`primary`, and `error`); it never falls back to a technical Activity theme. Only the explicit destructive
+action enqueues the durable Inbox mutation and removes the entry optimistically from every active
+subscriber. Custom inboxes keep the same mutation available through `Inbox.delete`.
 
 The headless API supports custom Compose or View-system inboxes:
 
 ```kotlin
-private val inboxPager by lazy { Engage.messageCenter.inbox.pager(pageSize = 20) }
+private val inboxPager by lazy {
+    Engage.messageCenter.inbox.pager(
+        pageSize = 20,
+        sortOrder = InboxSortOrder.NEWEST_FIRST,
+    )
+}
 
 override fun onStart() {
     super.onStart()
@@ -464,7 +521,7 @@ override fun onDestroy() {
 ```
 
 Use `unreadCount`, `markRead`, `markUnread`, `markAllRead`, and `delete` for host-owned badges and
-interactions.
+interactions. Sorting is server-side on `sentAt`; each sort order owns a separate cursor window.
 
 ## Feature flags
 

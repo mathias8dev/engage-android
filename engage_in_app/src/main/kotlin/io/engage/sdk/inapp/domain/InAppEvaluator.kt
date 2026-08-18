@@ -10,6 +10,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.util.Locale
+import kotlinx.serialization.json.JsonObject
 
 internal interface InAppHistory {
     val sessionId: Long
@@ -61,19 +62,31 @@ internal class InAppEvaluator(
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private var campaigns = emptyList<Campaign>()
-    private val eligibleAt = mutableMapOf<String, Instant>()
+    private data class Eligibility(val at: Instant, val trigger: Trigger?, val event: JsonObject)
+    private val eligibility = mutableMapOf<String, MutableMap<String, Eligibility>>()
     private var currentScreen: String? = null
     private var isForeground = false
 
     val foreground: Boolean get() = isForeground
 
     fun replaceCampaigns(value: List<Campaign>) {
+        val previousRevisions = campaigns.associate { it.key to it.revision }
         campaigns = value
         EngageLogger.debug("InAppEvaluator", "campaigns replaced count=${value.size}")
         val keys = value.mapTo(mutableSetOf()) { it.key }
-        eligibleAt.keys.retainAll(keys)
+        eligibility.keys.retainAll(keys)
+        value.forEach { campaign ->
+            if (previousRevisions[campaign.key] != null && previousRevisions[campaign.key] != campaign.revision) {
+                eligibility.remove(campaign.key)
+            }
+            val triggerIds = campaign.triggers.mapTo(mutableSetOf()) { it.id }
+            eligibility[campaign.key]?.keys?.retainAll(triggerIds + NO_TRIGGER)
+        }
         value.filter { it.triggers.isEmpty() }.forEach { campaign ->
-            eligibleAt.putIfAbsent(campaign.key, campaign.availableAt ?: campaign.publishedAt)
+            eligibility.getOrPut(campaign.key, ::mutableMapOf).putIfAbsent(
+                NO_TRIGGER,
+                Eligibility(campaign.availableAt ?: campaign.publishedAt, null, JsonObject(emptyMap())),
+            )
         }
         if (isForeground) {
             val now = clock.instant()
@@ -89,9 +102,9 @@ internal class InAppEvaluator(
     }
 
     fun resetContext() {
-        EngageLogger.debug("InAppEvaluator", "context reset campaigns=${campaigns.size} eligible=${eligibleAt.size}")
+        EngageLogger.debug("InAppEvaluator", "context reset campaigns=${campaigns.size} eligible=${eligibility.size}")
         campaigns = emptyList()
-        eligibleAt.clear()
+        eligibility.clear()
         currentScreen = null
         isForeground = false
     }
@@ -117,6 +130,7 @@ internal class InAppEvaluator(
             }
             is EngageSignal.ScreenViewed -> {
                 currentScreen = signal.key
+                removeScreenEligibilityExcept(signal.key)
                 campaigns.forEach { campaign ->
                     campaign.triggers.filter { it.type == TriggerType.SCREEN_VIEW && it.screenName == signal.key }
                         .forEach { markEligible(campaign, it, now) }
@@ -124,12 +138,11 @@ internal class InAppEvaluator(
             }
             EngageSignal.ScreenCleared -> {
                 currentScreen = null
-                campaigns.filter { campaign -> campaign.triggers.any { it.type == TriggerType.SCREEN_VIEW } }
-                    .forEach { eligibleAt.remove(it.key) }
+                removeScreenEligibilityExcept(null)
             }
             is EngageSignal.EventOccurred -> campaigns.forEach { campaign ->
                 campaign.triggers.filter { it.type == TriggerType.EVENT && it.eventName == signal.name }
-                    .forEach { markEligible(campaign, it, now) }
+                    .forEach { markEligible(campaign, it, now, signal.properties) }
             }
             EngageSignal.AppBackgrounded -> isForeground = false
             EngageSignal.LocalDataWiped -> resetContext()
@@ -139,12 +152,28 @@ internal class InAppEvaluator(
     fun candidates(): List<ResolvedContent> {
         val now = clock.instant()
         return campaigns.mapNotNull { campaign ->
-            val eligible = eligibleAt[campaign.key] ?: return@mapNotNull null
-            if (eligible.isAfter(now) || !isScheduled(campaign, now) || !withinLimits(campaign, now)) return@mapNotNull null
-            if (campaign.triggers.any { it.type == TriggerType.SCREEN_VIEW } &&
-                campaign.triggers.filter { it.type == TriggerType.SCREEN_VIEW }.none { it.screenName == currentScreen }
-            ) return@mapNotNull null
-            selectVariant(campaign)?.let { ResolvedContent(campaign, it) }
+            val eligible = eligibility[campaign.key]?.values
+                ?.asSequence()
+                ?.filter { !it.at.isAfter(now) && contextMatches(it.trigger) }
+                ?.minWithOrNull(compareBy<Eligibility>({ it.at }, { it.trigger?.id.orEmpty() }))
+                ?: return@mapNotNull null
+            if (!isScheduled(campaign, now) || !withinLimits(campaign, now)) return@mapNotNull null
+            selectVariant(campaign)?.let { variant ->
+                val liveValues = InAppPersonalization.values(
+                    campaign.personalization.values,
+                    eligible.event,
+                    appVersion,
+                    locales().firstOrNull()?.toLanguageTag() ?: "und",
+                    currentScreen,
+                    history.sessionCount,
+                )
+                ResolvedContent(
+                    campaign,
+                    variant,
+                    InAppPersonalization.resolve(variant.payload, liveValues, campaign.personalization.fallbacks),
+                    eligible.trigger,
+                )
+            }
         }.sortedWith(
             compareByDescending<ResolvedContent> { it.campaign.priority }
                 .thenBy { it.campaign.publishedAt }
@@ -152,7 +181,7 @@ internal class InAppEvaluator(
         ).also { resolved ->
             EngageLogger.debug(
                 "InAppEvaluator",
-                "candidates evaluated campaigns=${campaigns.size} eligible=${eligibleAt.size} " +
+                "candidates evaluated campaigns=${campaigns.size} eligible=${eligibility.values.sumOf { it.size }} " +
                     "resolved=${resolved.map { it.campaign.messageId }}",
             )
         }
@@ -161,7 +190,7 @@ internal class InAppEvaluator(
     fun nextEvaluationDelayMillis(): Long? {
         val now = clock.instant()
         val boundaries = buildList {
-            addAll(eligibleAt.values)
+            addAll(eligibility.values.flatMap { it.values }.map { it.at })
             campaigns.forEach { campaign ->
                 campaign.startAt?.let(::add)
                 campaign.endAt?.let(::add)
@@ -181,7 +210,7 @@ internal class InAppEvaluator(
     }
 
     fun consume(candidate: ResolvedContent) {
-        eligibleAt.remove(candidate.campaign.key)
+        eligibility.remove(candidate.campaign.key)
         EngageLogger.debug("InAppEvaluator", "candidate consumed messageId=${candidate.campaign.messageId}")
     }
 
@@ -201,12 +230,17 @@ internal class InAppEvaluator(
         if (campaigns.none { it.key == candidate.campaign.key && it.revision == candidate.campaign.revision }) return false
         val now = clock.instant()
         if (!isScheduled(candidate.campaign, now)) return false
-        return candidate.campaign.triggers.none { it.type == TriggerType.SCREEN_VIEW } ||
-            candidate.campaign.triggers.filter { it.type == TriggerType.SCREEN_VIEW }.any { it.screenName == currentScreen }
+        return contextMatches(candidate.matchedTrigger)
     }
 
-    private fun markEligible(campaign: Campaign, trigger: Trigger, now: Instant) {
-        eligibleAt[campaign.key] = now.plusSeconds(trigger.delaySeconds.toLong())
+    private fun markEligible(
+        campaign: Campaign,
+        trigger: Trigger,
+        now: Instant,
+        event: JsonObject = JsonObject(emptyMap()),
+    ) {
+        eligibility.getOrPut(campaign.key, ::mutableMapOf)[trigger.id] =
+            Eligibility(now.plusSeconds(trigger.delaySeconds.toLong()), trigger, event)
         EngageLogger.debug(
             "InAppEvaluator",
             "campaign eligible messageId=${campaign.messageId} trigger=${trigger.type} delaySeconds=${trigger.delaySeconds}",
@@ -214,12 +248,27 @@ internal class InAppEvaluator(
     }
 
     private fun markEligibleIfAbsent(campaign: Campaign, trigger: Trigger, now: Instant) {
-        val previous = eligibleAt.putIfAbsent(campaign.key, now.plusSeconds(trigger.delaySeconds.toLong()))
+        val previous = eligibility.getOrPut(campaign.key, ::mutableMapOf).putIfAbsent(
+            trigger.id,
+            Eligibility(now.plusSeconds(trigger.delaySeconds.toLong()), trigger, JsonObject(emptyMap())),
+        )
         EngageLogger.verbose(
             "InAppEvaluator",
             "campaign eligibility checked messageId=${campaign.messageId} trigger=${trigger.type} alreadyEligible=${previous != null}",
         )
     }
+
+    private fun removeScreenEligibilityExcept(screenName: String?) {
+        eligibility.values.forEach { matches ->
+            matches.entries.removeAll { (_, value) ->
+                value.trigger?.type == TriggerType.SCREEN_VIEW && value.trigger.screenName != screenName
+            }
+        }
+        eligibility.entries.removeAll { it.value.isEmpty() }
+    }
+
+    private fun contextMatches(trigger: Trigger?): Boolean =
+        trigger?.type != TriggerType.SCREEN_VIEW || trigger.screenName == currentScreen
 
     private fun isScheduled(campaign: Campaign, now: Instant): Boolean =
         campaign.startAt?.let { !now.isBefore(it) } != false &&
@@ -297,6 +346,10 @@ internal class InAppEvaluator(
         val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8))
         val positive = ((digest[0].toInt() and 0xff) shl 8) or (digest[1].toInt() and 0xff)
         return positive % 100
+    }
+
+    private companion object {
+        const val NO_TRIGGER = "__no_trigger__"
     }
 }
 

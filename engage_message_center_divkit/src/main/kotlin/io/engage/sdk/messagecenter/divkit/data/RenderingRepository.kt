@@ -3,6 +3,8 @@ package io.engage.sdk.messagecenter.divkit.data
 import io.engage.sdk.InboxEntryId
 import io.engage.sdk.EngageLogger
 import io.engage.sdk.MessageCenterRenderingSupport
+import io.engage.sdk.InboxRenderer
+import io.engage.sdk.InboxRenderingSurface
 import io.engage.sdk.messagecenter.divkit.domain.RenderingResolution
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -78,10 +80,13 @@ internal class RenderingRepository(
                     if (snapshot == null) {
                         RenderingResolution.Unavailable(entryId)
                     } else {
-                        require(snapshot.renderer == DIVKIT_RENDERER) {
+                        require(snapshot.renderer == InboxRenderer.DIVKIT) {
                             "Unsupported Inbox renderer ${snapshot.renderer}"
                         }
                         require(snapshot.revision > 0) { "Inbox rendering revision must be positive" }
+                        require(InboxRenderingSurface.entries.all(snapshot.surfaces::containsKey)) {
+                            "Inbox rendering must contain Summary and Detail surfaces"
+                        }
                         RenderingResolution.Available(snapshot)
                     }
                 }
@@ -103,7 +108,6 @@ internal class RenderingRepository(
 
     private companion object {
         const val MAX_BATCH_SIZE = 100
-        const val DIVKIT_RENDERER = "DIVKIT"
     }
 }
 

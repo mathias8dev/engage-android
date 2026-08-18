@@ -9,10 +9,12 @@ import io.engage.sdk.Engage
 import io.engage.sdk.EngageLogger
 import io.engage.sdk.MessageCenter
 import io.engage.sdk.MessageCenterRenderingSupport
+import io.engage.sdk.InboxEntryId
 import io.engage.sdk.messageCenter
 import io.engage.sdk.messagecenter.divkit.data.RenderingRepository
 import io.engage.sdk.messagecenter.divkit.data.RenderingStore
 import io.engage.sdk.messagecenter.divkit.render.EngageMessageCenterActivity
+import io.engage.sdk.messagecenter.divkit.render.EngageMessageCenterDetailActivity
 import io.engage.sdk.spi.EngageModule
 import io.engage.sdk.spi.EngageModuleContext
 import io.engage.sdk.spi.EngageSignal
@@ -74,15 +76,18 @@ internal class MessageCenterUiRuntime(private val context: EngageModuleContext) 
         }
     }
 
-    fun display(messageCenter: MessageCenter) {
+    fun display(messageCenter: MessageCenter, entryId: InboxEntryId? = null) {
         check(messageCenter is MessageCenterRenderingSupport) {
             "engage-message-center-divkit requires the official engage-message-center artifact"
         }
-        context.logInfo("MessageCenter.UI", "activity launching")
-        context.applicationContext.startActivity(
+        context.logInfo("MessageCenter.UI", "activity launching entryId=${entryId ?: "list"}")
+        val intent = if (entryId == null) {
             Intent(context.applicationContext, EngageMessageCenterActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
+        } else {
+            Intent(context.applicationContext, EngageMessageCenterDetailActivity::class.java)
+                .putExtra(EngageMessageCenterDetailActivity.EXTRA_ENTRY_ID, entryId.value)
+        }
+        context.applicationContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     fun renderingSupport(): MessageCenterRenderingSupport =

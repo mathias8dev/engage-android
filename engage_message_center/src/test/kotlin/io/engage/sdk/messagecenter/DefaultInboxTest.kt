@@ -21,7 +21,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
@@ -35,6 +34,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -106,6 +106,102 @@ class DefaultInboxTest {
         store.close()
         appContext.deleteDatabase("engage_message_center.db")
     }
+
+    @Test
+    fun `direct detail can mark an entry read before it is cached`() = runTest {
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
+        appContext.deleteDatabase("engage_message_center.db")
+        val gate = CompletableDeferred<Unit>().apply { complete(Unit) }
+        val moduleContext = RuntimeContext(backgroundScope, gate)
+        val store = SqliteInboxStore(appContext, newId = { "batch-direct" })
+        val inbox = DefaultInbox(
+            context = moduleContext,
+            store = store,
+            client = InboxClient(moduleContext),
+            newId = { "operation-direct" },
+        )
+        runCurrent()
+
+        inbox.markRead(InboxEntryId("entry-opened-from-deep-link"))
+        runCurrent()
+
+        assertEquals(1, moduleContext.mutationRequests)
+        store.close()
+        appContext.deleteDatabase("engage_message_center.db")
+    }
+
+    @Test
+    fun `direct detail can delete an entry before it is cached`() = runTest {
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
+        appContext.deleteDatabase("engage_message_center.db")
+        val moduleContext = RuntimeContext(backgroundScope, CompletableDeferred(Unit).apply { complete(Unit) })
+        val store = SqliteInboxStore(appContext, newId = { "batch-delete-direct" })
+        val inbox = DefaultInbox(
+            context = moduleContext,
+            store = store,
+            client = InboxClient(moduleContext),
+            newId = { "operation-delete-direct" },
+        )
+        runCurrent()
+
+        inbox.delete(InboxEntryId("entry-opened-from-deep-link"))
+        runCurrent()
+
+        assertEquals(1, moduleContext.mutationRequests)
+        store.close()
+        appContext.deleteDatabase("engage_message_center.db")
+    }
+
+    @Test
+    fun `presentation lifecycle changes across identity transition and wipe`() = runTest {
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
+        appContext.deleteDatabase("engage_message_center.db")
+        val moduleContext = RuntimeContext(backgroundScope, CompletableDeferred(Unit).apply { complete(Unit) })
+        val store = SqliteInboxStore(appContext)
+        val inbox = DefaultInbox(moduleContext, store, InboxClient(moduleContext))
+        assertTrue(inbox.presentationState.value.isEnabled)
+        runCurrent()
+        val initial = inbox.presentationState.value
+        assertTrue(initial.isEnabled)
+        assertTrue(InboxEntryId("entry-1") in initial.entryIds)
+
+        moduleContext.generation.value = 4
+        runCurrent()
+        val rebound = inbox.presentationState.value
+        assertEquals(4, rebound.generation)
+        assertTrue(rebound.lifecycleRevision > initial.lifecycleRevision)
+
+        moduleContext.signals.emit(EngageSignal.LocalDataWiped)
+        runCurrent()
+        val wiped = inbox.presentationState.value
+        assertTrue(wiped.lifecycleRevision > rebound.lifecycleRevision)
+        assertTrue(wiped.entryIds.isEmpty())
+        assertEquals(false, wiped.isEnabled)
+        store.close()
+        appContext.deleteDatabase("engage_message_center.db")
+    }
+
+    @Test
+    fun `an existing pager refreshes when message center is enabled`() = runTest {
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
+        appContext.deleteDatabase("engage_message_center.db")
+        val moduleContext = RuntimeContext(backgroundScope, CompletableDeferred(Unit).apply { complete(Unit) })
+        moduleContext.enabledFeatures.value = emptySet()
+        val store = SqliteInboxStore(appContext)
+        val inbox = DefaultInbox(moduleContext, store, InboxClient(moduleContext))
+        val pager = inbox.pager(20)
+        runCurrent()
+        assertEquals(0, moduleContext.pageRequests)
+
+        moduleContext.enabledFeatures.value = setOf(SdkFeature.MESSAGE_CENTER)
+        runCurrent()
+
+        assertEquals(1, moduleContext.pageRequests)
+        assertEquals("entry-1", pager.state.value.entries.single().id.value)
+        pager.close()
+        store.close()
+        appContext.deleteDatabase("engage_message_center.db")
+    }
 }
 private class RuntimeContext(
     override val scope: CoroutineScope,
@@ -117,7 +213,7 @@ private class RuntimeContext(
     override val generation = MutableStateFlow(3L)
     override val privacy = MutableStateFlow(PrivacyState.OPTED_IN)
     override val enabledFeatures = MutableStateFlow(setOf(SdkFeature.MESSAGE_CENTER))
-    override val signals: SharedFlow<EngageSignal> = MutableSharedFlow(extraBufferCapacity = 8)
+    override val signals = MutableSharedFlow<EngageSignal>(extraBufferCapacity = 8)
     var pageRequests = 0
     var mutationRequests = 0
 

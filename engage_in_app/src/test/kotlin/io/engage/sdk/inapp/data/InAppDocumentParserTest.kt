@@ -4,6 +4,7 @@ import io.engage.sdk.EmbeddedPresentation
 import io.engage.sdk.InAppContentType
 import io.engage.sdk.spi.EngageRemoteDocument
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -24,6 +25,14 @@ class InAppDocumentParserTest {
         assertEquals(1, campaign.triggers.size)
         assertEquals(InAppContentType.SCENE, campaign.variants.single().type)
         assertEquals("home.hero", (campaign.variants.single().presentation as EmbeddedPresentation).placementKey)
+        assertEquals(
+            JsonPrimitive("Ada"),
+            campaign.personalization.values["profile"]?.jsonObject?.get("first_name"),
+        )
+        assertEquals(
+            JsonPrimitive("friend"),
+            campaign.personalization.fallbacks["profile"]?.jsonObject?.get("first_name"),
+        )
     }
 
     @Test
@@ -54,6 +63,10 @@ class InAppDocumentParserTest {
               "experienceId": "experience-1",
               "version": 4,
               "publishedAt": "2026-01-01T00:00:00Z",
+              "personalization": {
+                "values": {"profile":{"first_name":"Ada"}},
+                "fallbacks": {"profile":{"first_name":"friend"}}
+              },
               "definition": {
                 "triggers": [{"id":"open","type":"APP_OPEN","delaySeconds":0}],
                 "schedule": {"startAt":null,"endAt":null,"timezoneMode":"ENVIRONMENT"},
