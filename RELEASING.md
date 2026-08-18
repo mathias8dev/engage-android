@@ -21,3 +21,8 @@ must not be used as a release shortcut; branch protection should only allow the 
 
 Do not create module-specific tags. A single repository tag identifies the exact source graph for
 all Android artifacts.
+
+GitHub Actions owns the full build, test, and lint verification. JitPack only runs
+`publishToMavenLocal` for the immutable release tag; repeating the complete verification there
+wastes the constrained JitPack build environment and can prevent otherwise valid artifacts from
+being published.
