@@ -34,7 +34,7 @@ internal object InAppPersonalization {
             JsonObject(buildMap {
                 put("app_version", JsonPrimitive(appVersion))
                 put("locale", JsonPrimitive(locale))
-                screenName?.let { put("screen_name", JsonPrimitive(it)) }
+                screenName?.let { put("screen_key", JsonPrimitive(it)) }
                 put("session_count", JsonPrimitive(sessionCount))
             }),
         )
