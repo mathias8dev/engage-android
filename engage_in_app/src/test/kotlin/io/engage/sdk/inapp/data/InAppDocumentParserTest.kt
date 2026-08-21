@@ -57,7 +57,78 @@ class InAppDocumentParserTest {
         assertEquals(null, InAppDocumentParser.parse(malformed))
     }
 
+    @Test
+    fun `preserves automation routing context and declared outcomes`() {
+        val document = EngageRemoteDocument(
+            key = "automation:message-1",
+            revision = 8,
+            payload = Json.parseToJsonElement(
+                """
+                {
+                  "source":"AUTOMATION",
+                  "experienceId":"experience-1",
+                  "experienceVersion":4,
+                  "messageId":"message-1",
+                  "automationId":"automation-1",
+                  "automationVersion":3,
+                  "automationRunId":"run-1",
+                  "automationNodeId":"node-1",
+                  "outcomeKeys":["accepted","declined"],
+                  "content":{"type":"SCENE","payload":{"card":{}}},
+                  "presentation":{"mode":"EMBEDDED","embedded":{"placementKey":"home.hero"}},
+                  "availableAt":"2026-01-01T00:00:00Z",
+                  "expiresAt":"2027-01-01T00:00:00Z"
+                }
+                """.trimIndent(),
+            ).jsonObject,
+        )
+
+        val automation = requireNotNull(InAppDocumentParser.parse(document)).automation
+
+        requireNotNull(automation)
+        assertEquals("automation-1", automation.automationId)
+        assertEquals(3, automation.automationVersion)
+        assertEquals("run-1", automation.runId)
+        assertEquals("node-1", automation.nodeId)
+        assertEquals(4, automation.experienceVersion)
+        assertEquals(setOf("accepted", "declined"), automation.outcomeKeys)
+    }
+
+    @Test
+    fun `rejects automation documents with invalid outcome keys without crashing the host app`() {
+        val malformed = EngageRemoteDocument(
+            key = "automation:invalid-outcome",
+            revision = 1,
+            payload = Json.parseToJsonElement(
+                AUTOMATION.replace(
+                    "\"outcomeKeys\":[\"accepted\",\"declined\"]",
+                    "\"outcomeKeys\":[\"accepted\",\"Invalid Key\"]",
+                ),
+            ).jsonObject,
+        )
+
+        assertEquals(null, InAppDocumentParser.parse(malformed))
+    }
+
     private companion object {
+        val AUTOMATION = """
+            {
+              "source":"AUTOMATION",
+              "experienceId":"experience-1",
+              "experienceVersion":4,
+              "messageId":"message-1",
+              "automationId":"automation-1",
+              "automationVersion":3,
+              "automationRunId":"run-1",
+              "automationNodeId":"node-1",
+              "outcomeKeys":["accepted","declined"],
+              "content":{"type":"SCENE","payload":{"card":{}}},
+              "presentation":{"mode":"EMBEDDED","embedded":{"placementKey":"home.hero"}},
+              "availableAt":"2026-01-01T00:00:00Z",
+              "expiresAt":"2027-01-01T00:00:00Z"
+            }
+        """.trimIndent()
+
         val EXPERIENCE = """
             {
               "experienceId": "experience-1",

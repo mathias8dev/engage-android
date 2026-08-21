@@ -6,6 +6,7 @@ import io.engage.sdk.DismissalPolicy
 import io.engage.sdk.EmbeddedPresentation
 import io.engage.sdk.EmptyStatePolicy
 import io.engage.sdk.InAppAnimation
+import io.engage.sdk.InAppAutomationContext
 import io.engage.sdk.InAppContentType
 import io.engage.sdk.OverlayFormat
 import io.engage.sdk.OverlayPosition
@@ -30,6 +31,8 @@ import kotlinx.serialization.json.intOrNull
 import java.time.Instant
 
 internal object InAppDocumentParser {
+    private val outcomeKey = Regex("^[a-z][a-z0-9_.-]{0,127}$")
+
     fun parse(document: EngageRemoteDocument): Campaign? = runCatching {
         val payload = document.payload
         if (payload.string("source") == "AUTOMATION") parseAutomation(document) else parseExperience(document)
@@ -73,6 +76,7 @@ internal object InAppDocumentParser {
             variants = variants,
             personalization = parsePersonalization(payload),
             oneShot = false,
+            automation = null,
         )
     }
 
@@ -108,6 +112,17 @@ internal object InAppDocumentParser {
             variants = listOf(variant),
             personalization = parsePersonalization(payload),
             oneShot = true,
+            automation = InAppAutomationContext(
+                automationId = payload.requiredString("automationId"),
+                automationVersion = payload.requiredInt("automationVersion"),
+                runId = payload.requiredString("automationRunId"),
+                nodeId = payload.requiredString("automationNodeId"),
+                experienceVersion = payload.requiredInt("experienceVersion"),
+                outcomeKeys = payload.requiredArray("outcomeKeys")
+                    .map { it.requiredStringValue() }
+                    .onEach { require(outcomeKey.matches(it)) { "Invalid automation outcome key: $it" } }
+                    .toSet(),
+            ),
         )
     }
 
@@ -175,6 +190,12 @@ internal object InAppDocumentParser {
         else -> error("Unsupported presentation mode")
     }
 }
+
+private fun JsonObject.requiredInt(key: String): Int =
+    (get(key) as? JsonPrimitive)?.intOrNull ?: error("Missing $key")
+
+private fun JsonElement.requiredStringValue(): String =
+    (this as? JsonPrimitive)?.contentOrNull ?: error("Expected string")
 
 private fun JsonElement.requiredObject(): JsonObject = this as? JsonObject ?: error("Expected object")
 private fun JsonObject.requiredObject(key: String): JsonObject = get(key) as? JsonObject ?: error("Expected object: $key")

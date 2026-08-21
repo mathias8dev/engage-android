@@ -398,6 +398,8 @@ internal class CoreRuntime(
             put("messageId", messageId)
             variantId?.let { put("variantId", it) }
             put("type", type.name)
+            outcomeKey?.let { put("outcomeKey", it) }
+            properties?.let { put("properties", it) }
         }
         is EngageModuleOperation.PushReceipt -> OperationType.PUSH_RECEIPT_RECORDED to buildJsonObject {
             put("deliveryId", deliveryId)

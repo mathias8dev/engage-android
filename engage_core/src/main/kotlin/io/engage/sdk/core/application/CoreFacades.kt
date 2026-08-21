@@ -219,9 +219,9 @@ internal class DefaultEvents(
         coordinator.enqueue(
             OperationType.SCREEN_VIEWED,
             buildJsonObject {
-                put("screenKey", screenKey)
-                previousScreen?.let { put("previousScreenKey", it) }
-                previousDuration?.let { put("previousVisibleDurationMillis", it) }
+                put("screen_key", screenKey)
+                previousScreen?.let { put("previous_screen_key", it) }
+                previousDuration?.let { put("previous_visible_duration_millis", it) }
             },
         )
     }
@@ -248,8 +248,8 @@ internal class DefaultEvents(
             coordinator.enqueue(
                 OperationType.SCREEN_CLEARED,
                 buildJsonObject {
-                    put("screenKey", screenKey)
-                    put("visibleDurationMillis", visibleDuration)
+                    put("screen_key", screenKey)
+                    put("visible_duration_millis", visibleDuration)
                 },
             )
         }

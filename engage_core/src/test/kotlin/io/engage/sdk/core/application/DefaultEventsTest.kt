@@ -57,9 +57,11 @@ class DefaultEventsTest {
         elapsed = 10_000
         events.trackScreen("foreground_screen")
 
+        assertEquals("foreground_screen", outbox.operations.last().payload["screen_key"]!!.jsonPrimitive.content)
+        assertEquals("background_screen", outbox.operations.last().payload["previous_screen_key"]!!.jsonPrimitive.content)
         assertEquals(
             1_000L,
-            outbox.operations.last().payload["previousVisibleDurationMillis"]!!.jsonPrimitive.long,
+            outbox.operations.last().payload["previous_visible_duration_millis"]!!.jsonPrimitive.long,
         )
     }
 
@@ -93,8 +95,39 @@ class DefaultEventsTest {
 
         assertEquals(
             1_000L,
-            outbox.operations.last().payload["previousVisibleDurationMillis"]!!.jsonPrimitive.long,
+            outbox.operations.last().payload["previous_visible_duration_millis"]!!.jsonPrimitive.long,
         )
+    }
+
+    @Test
+    fun `screen operations use the canonical snake case wire contract`() = runTest {
+        var elapsed = 0L
+        val outbox = RecordingOutbox()
+        val sessions = FakeSessions()
+        val coordinator = OperationCoordinator(
+            URI.create("https://edge.test/v1/"),
+            "eng_app_test",
+            DeviceMetadata("fr", "UTC", "1", "1", null, null, null),
+            sessions,
+            outbox,
+            NoopApi,
+        )
+        val events = DefaultEvents(
+            coordinator,
+            MutableStateFlow(setOf(SdkFeature.ANALYTICS)),
+            sessions.privacy,
+            MutableSharedFlow<EngageSignal>(extraBufferCapacity = 1),
+        ) { elapsed }
+
+        events.trackScreen("checkout")
+        elapsed = 250
+        events.clearScreen()
+
+        assertEquals("checkout", outbox.operations[0].payload["screen_key"]!!.jsonPrimitive.content)
+        assertEquals(null, outbox.operations[0].payload["screenKey"])
+        assertEquals("checkout", outbox.operations[1].payload["screen_key"]!!.jsonPrimitive.content)
+        assertEquals(250L, outbox.operations[1].payload["visible_duration_millis"]!!.jsonPrimitive.long)
+        assertEquals(null, outbox.operations[1].payload["visibleDurationMillis"])
     }
 
     private class FakeSessions : SessionStore {

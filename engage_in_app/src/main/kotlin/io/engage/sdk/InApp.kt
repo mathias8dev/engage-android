@@ -38,6 +38,16 @@ public data class InAppContent(
     val type: InAppContentType,
     val payload: JsonObject,
     val presentation: PresentationSpec,
+    val automation: InAppAutomationContext? = null,
+)
+
+public data class InAppAutomationContext(
+    val automationId: String,
+    val automationVersion: Int,
+    val runId: String,
+    val nodeId: String,
+    val experienceVersion: Int,
+    val outcomeKeys: Set<String>,
 )
 
 public enum class DisplayDecision { ALLOW, DEFER, DISCARD }
@@ -55,6 +65,16 @@ public interface InAppOverlays {
 public interface InApp {
     val overlays: InAppOverlays
     fun placement(key: String): StateFlow<InAppContent?>
+    suspend fun trackOutcome(
+        content: InAppContent,
+        key: String,
+        properties: JsonObject = JsonObject(emptyMap()),
+    ): Boolean = trackOutcome(content.messageId, key, properties)
+    suspend fun trackOutcome(
+        messageId: String,
+        key: String,
+        properties: JsonObject = JsonObject(emptyMap()),
+    ): Boolean
 }
 
 public val Engage.inApp: InApp get() = EngageInAppModule.requireApi()

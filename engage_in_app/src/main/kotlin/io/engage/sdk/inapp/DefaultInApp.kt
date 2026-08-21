@@ -174,6 +174,44 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
         interaction(content, InteractionType.CONVERSION)
     }
 
+    override fun onOutcome(content: InAppContent, key: String, properties: JsonObject) {
+        context.scope.launch { trackOutcome(content, key, properties) }
+    }
+
+    override suspend fun trackOutcome(messageId: String, key: String, properties: JsonObject): Boolean {
+        if (!OUTCOME_KEY.matches(key)) {
+            context.logWarn("InApp", "outcome ignored messageId=$messageId key=$key reason=invalid_key")
+            return false
+        }
+        val candidate = resolutions.values.firstOrNull { it.campaign.messageId == messageId } ?: run {
+            context.logWarn("InApp", "outcome ignored messageId=$messageId key=$key reason=unknown_resolution")
+            return false
+        }
+        val automation = candidate.campaign.automation ?: run {
+            context.logWarn("InApp", "outcome ignored messageId=$messageId key=$key reason=not_automation")
+            return false
+        }
+        if (key !in automation.outcomeKeys) {
+            context.logWarn("InApp", "outcome ignored messageId=$messageId key=$key reason=undeclared")
+            return false
+        }
+        val accepted = context.enqueue(
+            EngageModuleOperation.Interaction(
+                experienceId = candidate.campaign.experienceId,
+                messageId = candidate.campaign.messageId,
+                variantId = candidate.variant.id ?: candidate.variant.key,
+                type = InteractionType.OUTCOME,
+                outcomeKey = key,
+                properties = properties,
+            ),
+        )
+        context.logInfo(
+            "InApp",
+            "outcome enqueued messageId=$messageId key=$key accepted=$accepted",
+        )
+        return accepted
+    }
+
     override fun onAction(content: InAppContent, name: String, arguments: JsonObject) {
         context.logInfo(
             "InApp",
@@ -390,6 +428,7 @@ internal class DefaultInApp(private val context: EngageModuleContext) : InApp, I
 
     private companion object {
         val PLACEMENT_KEY = Regex("^[a-z][a-z0-9_.-]{0,127}$")
+        val OUTCOME_KEY = Regex("^[a-z][a-z0-9_.-]{0,127}$")
     }
 }
 
@@ -425,6 +464,7 @@ private fun ResolvedContent.toPublic() = InAppContent(
     type = variant.type,
     payload = payload,
     presentation = variant.presentation,
+    automation = campaign.automation,
 )
 
 private fun ResolvedContent.matches(content: InAppContent): Boolean =

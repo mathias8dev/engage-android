@@ -58,13 +58,15 @@ public sealed interface EngageModuleOperation {
         val messageId: String,
         val variantId: String?,
         val type: InteractionType,
+        val outcomeKey: String? = null,
+        val properties: JsonObject? = null,
     ) : EngageModuleOperation
 
     public data class PushReceipt(val deliveryId: String, val type: PushReceiptType) : EngageModuleOperation
 }
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-public enum class InteractionType { IMPRESSION, CLICK, DISMISS, CONVERSION }
+public enum class InteractionType { IMPRESSION, CLICK, DISMISS, CONVERSION, OUTCOME }
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public enum class PushReceiptType { DELIVERED, OPENED }
