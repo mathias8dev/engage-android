@@ -280,7 +280,7 @@ internal class RenderedVisibilityGate {
     }
 }
 
-private class EngageDivActionHandler(
+internal class EngageDivActionHandler(
     private val content: InAppContent,
     private val callbacks: InAppRenderCallbacks,
 ) : DivActionHandler() {
@@ -305,6 +305,13 @@ private class EngageDivActionHandler(
         when (uri.host) {
             "dismiss" -> callbacks.onDismissed(content)
             "conversion" -> callbacks.onConversion(content)
+            "outcome" -> {
+                val key = uri.pathSegments.firstOrNull() ?: return
+                val properties = uri.getQueryParameter("properties")?.let { raw ->
+                    runCatching { kotlinx.serialization.json.Json.parseToJsonElement(raw).jsonObject }.getOrNull()
+                } ?: JsonObject(emptyMap())
+                callbacks.onOutcome(content, key, properties)
+            }
             "action" -> {
                 val name = uri.pathSegments.firstOrNull() ?: return
                 val arguments = uri.getQueryParameter("arguments")?.let { raw ->

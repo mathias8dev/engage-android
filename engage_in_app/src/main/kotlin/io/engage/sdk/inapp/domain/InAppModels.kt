@@ -1,6 +1,7 @@
 package io.engage.sdk.inapp.domain
 
 import io.engage.sdk.InAppContentType
+import io.engage.sdk.InAppAutomationContext
 import io.engage.sdk.PresentationSpec
 import kotlinx.serialization.json.JsonObject
 import java.time.Instant
@@ -55,6 +56,7 @@ internal data class Campaign(
     val variants: List<ContentVariant>,
     val personalization: InAppPersonalizationContext = InAppPersonalizationContext(),
     val oneShot: Boolean,
+    val automation: InAppAutomationContext? = null,
 )
 
 internal data class ResolvedContent(

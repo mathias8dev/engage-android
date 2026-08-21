@@ -25,6 +25,8 @@ import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -56,6 +58,27 @@ class DefaultInAppTest {
         assertNull(first.value)
     }
 
+    @Test
+    fun `automation outcomes are constrained and queued with their properties`() = runTest {
+        val moduleContext = FakeModuleContext(backgroundScope)
+        val inApp = DefaultInApp(moduleContext)
+        val placement = inApp.placement("home.hero")
+        moduleContext.documents.value = listOf(automationDocument())
+        moduleContext.mutableSignals.emit(EngageSignal.AppOpened)
+        runCurrent()
+        val content = requireNotNull(placement.value)
+        val properties = Json.parseToJsonElement("""{"plan":"pro"}""").jsonObject
+
+        assertTrue(inApp.trackOutcome(content, "accepted", properties))
+        assertFalse(inApp.trackOutcome(content, "not_connected", properties))
+        assertFalse(inApp.trackOutcome(content, "Invalid Key", properties))
+
+        val operation = moduleContext.operations.single() as EngageModuleOperation.Interaction
+        assertEquals(io.engage.sdk.spi.InteractionType.OUTCOME, operation.type)
+        assertEquals("accepted", operation.outcomeKey)
+        assertEquals(properties, operation.properties)
+    }
+
     private fun document() = EngageRemoteDocument(
         "hero",
         1,
@@ -75,6 +98,23 @@ class DefaultInAppTest {
                   "presentation":{"mode":"EMBEDDED","embedded":{"placementKey":"home.hero","emptyState":"COLLAPSE"}}
                 }]
               }
+            }
+            """.trimIndent(),
+        ).jsonObject,
+    )
+
+    private fun automationDocument() = EngageRemoteDocument(
+        "automation:message-1",
+        1,
+        Json.parseToJsonElement(
+            """
+            {
+              "source":"AUTOMATION","experienceId":"hero","experienceVersion":1,
+              "messageId":"message-1","automationId":"automation-1","automationVersion":2,
+              "automationRunId":"run-1","automationNodeId":"node-1","outcomeKeys":["accepted"],
+              "content":{"type":"SCENE","payload":{"card":{"log_id":"hero","states":[]}}},
+              "presentation":{"mode":"EMBEDDED","embedded":{"placementKey":"home.hero"}},
+              "availableAt":"2026-01-01T00:00:00Z","expiresAt":"2027-01-01T00:00:00Z"
             }
             """.trimIndent(),
         ).jsonObject,

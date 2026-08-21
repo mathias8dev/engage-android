@@ -417,6 +417,30 @@ findViewById<EngageInAppView>(R.id.home_hero).placementKey = "home.hero"
 The backend remains responsible for audience, schedule, frequency, priority, and variant selection;
 the SDK remains responsible for cached evaluation and native DivKit presentation.
 
+### Automation outcomes
+
+A published In-App Experience can expose terminal outcomes to an Automation graph. DivKit may emit
+one directly with an Engage URL:
+
+```text
+engage://outcome/checkout_completed?properties=%7B%22orderId%22%3A%22o-42%22%7D
+```
+
+Custom application UI can report the same typed outcome through the headless API:
+
+```kotlin
+Engage.inApp.trackOutcome(
+    content = content,
+    key = "checkout_completed",
+    properties = buildJsonObject { put("orderId", order.id) },
+)
+```
+
+`content.automation` identifies the immutable automation run and lists the only accepted
+`outcomeKeys`. The SDK rejects unknown keys locally, stores accepted interactions in its durable
+operation outbox, and lets the backend validate the published properties contract and perform the
+idempotent graph transition.
+
 ## Custom actions
 
 In-app experiences, Message Center documents, and other Engage content can invoke application-owned
