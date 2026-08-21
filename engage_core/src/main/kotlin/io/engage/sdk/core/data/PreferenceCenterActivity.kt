@@ -25,7 +25,10 @@ import io.engage.sdk.Channel
 import io.engage.sdk.Engage
 import io.engage.sdk.EngageLogger
 import io.engage.sdk.PreferenceCenterAppearance
+import io.engage.sdk.PreferenceCenterColorScheme
+import io.engage.sdk.PreferenceCenterProjectStyle
 import io.engage.sdk.PreferenceCenterSnapshot
+import io.engage.sdk.PreferenceCenterStylePolicy
 import io.engage.sdk.core.R
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -37,6 +40,7 @@ public class PreferenceCenterActivity : Activity() {
     private lateinit var palette: PreferencePalette
     private lateinit var screenTitle: TextView
     private lateinit var body: FrameLayout
+    private val hasExplicitMaterialTheme: Boolean by lazy { intent.hasExtra(EXTRA_PRIMARY) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,6 +51,13 @@ public class PreferenceCenterActivity : Activity() {
             "activity created key=${intent.getStringExtra(EXTRA_CENTER_KEY) ?: "default"}",
         )
 
+        installContent()
+        val key = intent.getStringExtra(EXTRA_CENTER_KEY)
+        val center = if (key == null) Engage.preferenceCenter.center() else Engage.preferenceCenter.center(key)
+        scope.launch { center.collectLatest(::render) }
+    }
+
+    private fun installContent() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(palette.surface)
@@ -57,9 +68,6 @@ public class PreferenceCenterActivity : Activity() {
             installSystemBarInsets()
         }
         setContentView(root)
-        val key = intent.getStringExtra(EXTRA_CENTER_KEY)
-        val center = if (key == null) Engage.preferenceCenter.center() else Engage.preferenceCenter.center(key)
-        scope.launch { center.collectLatest(::render) }
     }
 
     override fun onDestroy() {
@@ -73,6 +81,13 @@ public class PreferenceCenterActivity : Activity() {
             "PreferencesUI",
             "render snapshot=${snapshot?.key} sections=${snapshot?.sections?.size ?: 0}",
         )
+        val projectScheme = snapshot?.projectStyle?.takeUnless { hasExplicitMaterialTheme }?.resolveForDevice()
+        val resolvedPalette = preferencePalette(projectScheme)
+        if (resolvedPalette != palette) {
+            palette = resolvedPalette
+            configureSystemBars()
+            installContent()
+        }
         body.removeAllViews()
         if (!snapshot.hasVisiblePreferences()) {
             screenTitle.text = getString(R.string.engage_preference_center_title)
@@ -333,7 +348,7 @@ public class PreferenceCenterActivity : Activity() {
         requestApplyInsets()
     }
 
-    private fun preferencePalette(): PreferencePalette {
+    private fun preferencePalette(project: ResolvedProjectScheme? = null): PreferencePalette {
         fun extra(key: String, fallback: Int): Int = if (intent.hasExtra(key)) intent.getIntExtra(key, fallback) else fallback
         val surface = themedColor(android.R.attr.colorBackground, Color.WHITE)
         val onSurface = themedColor(android.R.attr.textColorPrimary, Color.BLACK)
@@ -341,22 +356,54 @@ public class PreferenceCenterActivity : Activity() {
         val primary = themedColor(android.R.attr.colorAccent, Color.rgb(0, 106, 96))
         val appearance = intent.getStringExtra(EXTRA_APPEARANCE)
             ?.let { runCatching { PreferenceCenterAppearance.valueOf(it) }.getOrNull() }
+            ?: project?.appearance
             ?: if (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
                 android.content.res.Configuration.UI_MODE_NIGHT_YES
             ) PreferenceCenterAppearance.DARK else PreferenceCenterAppearance.LIGHT
         return PreferencePalette(
             appearance = appearance,
-            primary = extra(EXTRA_PRIMARY, primary),
-            onPrimary = extra(EXTRA_ON_PRIMARY, Color.WHITE),
-            primaryContainer = extra(EXTRA_PRIMARY_CONTAINER, primary.withAlpha(36)),
-            onPrimaryContainer = extra(EXTRA_ON_PRIMARY_CONTAINER, primary),
-            surface = extra(EXTRA_SURFACE, surface),
-            surfaceContainerLow = extra(EXTRA_SURFACE_CONTAINER_LOW, onSurface.withAlpha(10).compositeOver(surface)),
-            surfaceContainer = extra(EXTRA_SURFACE_CONTAINER, onSurface.withAlpha(20).compositeOver(surface)),
-            onSurface = extra(EXTRA_ON_SURFACE, onSurface),
-            onSurfaceVariant = extra(EXTRA_ON_SURFACE_VARIANT, onSurfaceVariant),
-            outlineVariant = extra(EXTRA_OUTLINE_VARIANT, onSurface.withAlpha(36).compositeOver(surface)),
+            primary = extra(EXTRA_PRIMARY, project?.colors?.primary ?: primary),
+            onPrimary = extra(EXTRA_ON_PRIMARY, project?.colors?.onPrimary ?: Color.WHITE),
+            primaryContainer = extra(EXTRA_PRIMARY_CONTAINER, project?.colors?.primaryContainer ?: primary.withAlpha(36)),
+            onPrimaryContainer = extra(EXTRA_ON_PRIMARY_CONTAINER, project?.colors?.onPrimaryContainer ?: primary),
+            surface = extra(EXTRA_SURFACE, project?.colors?.surface ?: surface),
+            surfaceContainerLow = extra(
+                EXTRA_SURFACE_CONTAINER_LOW,
+                project?.colors?.surfaceContainerLow ?: onSurface.withAlpha(10).compositeOver(surface),
+            ),
+            surfaceContainer = extra(
+                EXTRA_SURFACE_CONTAINER,
+                project?.colors?.surfaceContainer ?: onSurface.withAlpha(20).compositeOver(surface),
+            ),
+            onSurface = extra(EXTRA_ON_SURFACE, project?.colors?.onSurface ?: onSurface),
+            onSurfaceVariant = extra(EXTRA_ON_SURFACE_VARIANT, project?.colors?.onSurfaceVariant ?: onSurfaceVariant),
+            outlineVariant = extra(
+                EXTRA_OUTLINE_VARIANT,
+                project?.colors?.outlineVariant ?: onSurface.withAlpha(36).compositeOver(surface),
+            ),
         )
+    }
+
+    private fun PreferenceCenterProjectStyle.resolveForDevice(): ResolvedProjectScheme? {
+        val deviceAppearance = if (
+            resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        ) PreferenceCenterAppearance.DARK else PreferenceCenterAppearance.LIGHT
+        val modeKey = when (policy) {
+            PreferenceCenterStylePolicy.FIXED -> fixedModeKey
+            PreferenceCenterStylePolicy.SYSTEM -> if (deviceAppearance == PreferenceCenterAppearance.DARK) {
+                darkModeKey
+            } else {
+                lightModeKey
+            }
+        }?.takeIf(modes::containsKey) ?: fallbackModeKey.takeIf(modes::containsKey) ?: modes.keys.firstOrNull()
+        val colors = modeKey?.let(modes::get) ?: return null
+        val appearance = when (modeKey) {
+            darkModeKey -> PreferenceCenterAppearance.DARK
+            lightModeKey -> PreferenceCenterAppearance.LIGHT
+            else -> deviceAppearance
+        }
+        return ResolvedProjectScheme(appearance, colors)
     }
 
     private fun themedColor(attribute: Int, fallback: Int): Int {
@@ -435,6 +482,11 @@ private data class PreferencePalette(
     val onSurface: Int,
     val onSurfaceVariant: Int,
     val outlineVariant: Int,
+)
+
+private data class ResolvedProjectScheme(
+    val appearance: PreferenceCenterAppearance,
+    val colors: PreferenceCenterColorScheme,
 )
 
 private val Channel.displayName: String

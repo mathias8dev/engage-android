@@ -2,11 +2,15 @@ package io.engage.sdk.core.application
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import io.engage.sdk.Channel
 import io.engage.sdk.EngageLogger
 import io.engage.sdk.PreferenceCenter
 import io.engage.sdk.PreferenceCenterDisplayOptions
 import io.engage.sdk.PreferenceCenterSnapshot
+import io.engage.sdk.PreferenceCenterColorScheme
+import io.engage.sdk.PreferenceCenterProjectStyle
+import io.engage.sdk.PreferenceCenterStylePolicy
 import io.engage.sdk.PreferenceSection
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.SdkFeature
@@ -209,6 +213,43 @@ private class PreferenceProjection(
                         .mapNotNull(::subscription),
                 )
             },
+            projectStyle = projectStyle(definition["resolvedStyle"] as? JsonObject),
+        )
+    }
+
+    private fun projectStyle(value: JsonObject?): PreferenceCenterProjectStyle? {
+        value ?: return null
+        val policy = value.string("appearancePolicy")
+            ?.let { runCatching { PreferenceCenterStylePolicy.valueOf(it) }.getOrNull() }
+            ?: return null
+        val fallbackModeKey = value.string("fallbackModeKey") ?: return null
+        val systemModes = value["systemModeKeys"] as? JsonObject
+        val modes = (value["modes"] as? JsonObject).orEmpty().mapNotNull { (modeKey, rawPalette) ->
+            val palette = rawPalette as? JsonObject ?: return@mapNotNull null
+            modeKey to PreferenceCenterColorScheme(
+                primary = palette.color("PRIMARY"),
+                onPrimary = palette.color("ON_PRIMARY"),
+                primaryContainer = palette.color("PRIMARY_CONTAINER"),
+                onPrimaryContainer = palette.color("ON_PRIMARY_CONTAINER"),
+                surface = palette.color("SURFACE"),
+                surfaceContainerLow = palette.color("SURFACE_CONTAINER_LOW"),
+                surfaceContainer = palette.color("SURFACE_CONTAINER"),
+                onSurface = palette.color("ON_SURFACE"),
+                onSurfaceVariant = palette.color("ON_SURFACE_VARIANT"),
+                outlineVariant = palette.color("OUTLINE_VARIANT"),
+                error = palette.color("ERROR"),
+                onError = palette.color("ON_ERROR"),
+            )
+        }.toMap()
+        if (modes.isEmpty()) return null
+        return PreferenceCenterProjectStyle(
+            policy = policy,
+            fallbackModeKey = fallbackModeKey,
+            fixedModeKey = value.string("fixedModeKey"),
+            lightModeKey = systemModes?.string("LIGHT"),
+            darkModeKey = systemModes?.string("DARK"),
+            modes = modes,
+            designTokenVersion = (value["designTokenVersion"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: 0,
         )
     }
 
@@ -234,6 +275,7 @@ private fun JsonArray?.orEmptyObjects(): List<JsonObject> = this?.mapNotNull { i
 private fun JsonArray.strings(): List<String> = mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
 private fun JsonObject.string(key: String): String? = (get(key) as? JsonPrimitive)?.contentOrNull
 private fun JsonObject.boolean(key: String): Boolean? = (get(key) as? JsonPrimitive)?.booleanOrNull
+private fun JsonObject.color(key: String): Int? = string(key)?.let { runCatching { Color.parseColor(it) }.getOrNull() }
 
 private fun localized(element: JsonElement?): String? = when (element) {
     is JsonPrimitive -> element.contentOrNull

@@ -2,6 +2,7 @@ package io.engage.sdk.core.application
 
 import androidx.test.core.app.ApplicationProvider
 import io.engage.sdk.Channel
+import io.engage.sdk.PreferenceCenterStylePolicy
 import io.engage.sdk.PrivacyState
 import io.engage.sdk.SdkFeature
 import io.engage.sdk.core.domain.InstallationSession
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -51,6 +53,9 @@ class DefaultPreferenceCenterTest {
         assertSame(projection, center.center())
         val initial = projection.filterNotNull().first()
         assertEquals(true, initial.sections.single().subscriptions.single().profileChoices?.get(Channel.EMAIL))
+        assertEquals(PreferenceCenterStylePolicy.SYSTEM, initial.projectStyle?.policy)
+        assertEquals(7, initial.projectStyle?.designTokenVersion)
+        assertEquals(0xff006a60.toInt(), initial.projectStyle?.modes?.get("light")?.primary)
 
         outbox.pending.value = listOf(
             SdkOperation(
@@ -115,6 +120,20 @@ class DefaultPreferenceCenterTest {
                             put("definition", buildJsonObject {
                                 put("displayName", "Preferences")
                                 put("isDefault", true)
+                                put("resolvedStyle", buildJsonObject {
+                                    put("appearancePolicy", "SYSTEM")
+                                    put("fallbackModeKey", "light")
+                                    put("fixedModeKey", JsonNull)
+                                    put("systemModeKeys", buildJsonObject {
+                                        put("LIGHT", "light")
+                                        put("DARK", "dark")
+                                    })
+                                    put("designTokenVersion", 7)
+                                    put("modes", buildJsonObject {
+                                        put("light", buildJsonObject { put("PRIMARY", "#FF006A60") })
+                                        put("dark", buildJsonObject { put("PRIMARY", "#FF82D5C8") })
+                                    })
+                                })
                                 put("sections", buildJsonArray {
                                     add(buildJsonObject {
                                         put("key", "communications")

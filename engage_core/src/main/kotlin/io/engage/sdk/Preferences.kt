@@ -7,6 +7,7 @@ public data class PreferenceCenterSnapshot(
     val displayName: String,
     val description: String?,
     val sections: List<PreferenceSection>,
+    val projectStyle: PreferenceCenterProjectStyle? = null,
 )
 
 public data class PreferenceSection(
@@ -28,6 +29,37 @@ public enum class PreferenceCenterAppearance {
     LIGHT,
     DARK,
 }
+
+public enum class PreferenceCenterStylePolicy {
+    SYSTEM,
+    FIXED,
+}
+
+public data class PreferenceCenterColorScheme(
+    val primary: Int? = null,
+    val onPrimary: Int? = null,
+    val primaryContainer: Int? = null,
+    val onPrimaryContainer: Int? = null,
+    val surface: Int? = null,
+    val surfaceContainerLow: Int? = null,
+    val surfaceContainer: Int? = null,
+    val onSurface: Int? = null,
+    val onSurfaceVariant: Int? = null,
+    val outlineVariant: Int? = null,
+    val error: Int? = null,
+    val onError: Int? = null,
+)
+
+/** Immutable project style snapshot compiled when the Preference Center is published. */
+public data class PreferenceCenterProjectStyle(
+    val policy: PreferenceCenterStylePolicy,
+    val fallbackModeKey: String,
+    val fixedModeKey: String?,
+    val lightModeKey: String?,
+    val darkModeKey: String?,
+    val modes: Map<String, PreferenceCenterColorScheme>,
+    val designTokenVersion: Int,
+)
 
 public data class PreferenceCenterMaterialTheme(
     val appearance: PreferenceCenterAppearance,
